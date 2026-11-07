@@ -1,7 +1,7 @@
 [project]
 name = "trustbench"
 version = "0.1.0"
-description = "Add your description here"
+description = "A statistical regression gate for LLM and RAG systems."
 readme = "README.md"
 authors = [
     { name = "Juan Salazar", email = "jfranciscosalazarc1@gmail.com" }
@@ -19,4 +19,18 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.2.0",
+    "ruff>=0.17.4",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+xfail_strict = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]
