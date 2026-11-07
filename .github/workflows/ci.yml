@@ -36,6 +36,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      - name: Check file hygiene (pre-commit)
+        run: uv run pre-commit run --all-files --show-diff-on-failure
+
       - name: Lint
         run: uv run ruff check --output-format=github .
 
