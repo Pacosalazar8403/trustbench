@@ -11,13 +11,20 @@ significantly.
 
 ## Status
 
-Pre-alpha. This repository currently contains only the project skeleton. Everything under
-"Planned" is not built yet.
+Pre-alpha. This repository currently contains the project skeleton and its quality
+tooling. Everything under "Planned" is not built yet.
 
 ## Current
 
 - Python 3.12 package managed with uv (src layout)
-- Smoke tests with pytest
+- Smoke tests with pytest (strict markers and config)
+- Linting and formatting with ruff
+- pre-commit hooks for file hygiene: final newlines, trailing whitespace, valid YAML and
+  TOML, merge-conflict markers, and large files
+- CI on every pull request: `lint` (pre-commit and ruff) and `test` (pytest), with all
+  actions pinned by commit SHA and read-only permissions
+- `main` is protected: changes land only through squash-merged pull requests with passing
+  checks
 
 ## Planned
 
@@ -35,5 +42,14 @@ Pre-alpha. This repository currently contains only the project skeleton. Everyth
 
 ```bash
 uv sync --locked
+uv run pre-commit install
+```
+
+Run the same checks CI runs:
+
+```bash
+uv run pre-commit run --all-files
+uv run ruff check .
+uv run ruff format --check .
 uv run pytest
 ```
