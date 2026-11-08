@@ -12,12 +12,15 @@ significantly.
 ## Status
 
 Pre-alpha. This repository currently contains the project skeleton, its quality tooling,
-and the schema for dataset examples. Everything under "Planned" is not built yet.
+the schema for dataset examples, and a loader for dataset files. Everything under
+"Planned" is not built yet.
 
 ## Current
 
 - Python 3.12 package managed with uv (src layout)
 - Dataset example schema with Pydantic validation (see "Dataset format" below)
+- JSONL dataset loader that validates every line and reports all problems at once, each
+  with its line number
 - Tests with pytest (strict markers and config)
 - Linting and formatting with ruff, strict type checking with mypy (pydantic plugin)
 - pre-commit hooks for file hygiene: final newlines, trailing whitespace, valid YAML and
@@ -31,6 +34,8 @@ and the schema for dataset examples. Everything under "Planned" is not built yet
 
 - Versioned, hand-verified dataset built on public UCCS policy documents, with a fixed dev
   split and a held-out test split
+- Corpus snapshot of the source pages, with automatic checks that every evidence quote
+  appears in its document
 - Paired bootstrap confidence intervals, McNemar's test, and Holm correction for slices
 - Noise baseline (same config, repeated runs) and power analysis (minimum detectable effect)
 - Deterministic scorers plus an LLM judge calibrated against human labels (Cohen's kappa)
@@ -42,22 +47,11 @@ and the schema for dataset examples. Everything under "Planned" is not built yet
 
 ## Dataset format
 
-Each example is one question with a reference answer and the evidence that proves it:
+A dataset is a JSONL file: one JSON object per line, one example per object. Each example
+is one question with a reference answer and the evidence that proves it:
 
 ```json
-{
-  "id": "withdraw-001",
-  "question": "Can I drop a class in week 3 and get a refund?",
-  "reference_answer": "Yes. Classes dropped before the census date get a full refund.",
-  "category": "lookup",
-  "difficulty": "easy",
-  "evidence": [
-    {
-      "doc_id": "registration-policy",
-      "quote": "Courses dropped before the census date receive a full refund."
-    }
-  ]
-}
+{"id": "withdraw-001", "question": "Can I drop a class in week 3 and get a refund?", "reference_answer": "Yes. Classes dropped before the census date get a full refund.", "category": "lookup", "difficulty": "easy", "evidence": [{"doc_id": "registration-policy", "quote": "Courses dropped before the census date receive a full refund."}]}
 ```
 
 | Category        | What it tests                                                      |
@@ -69,15 +63,23 @@ Each example is one question with a reference answer and the evidence that prove
 | `false_premise` | The question assumes something the policy contradicts              |
 | `unanswerable`  | The documents do not contain the answer (no evidence allowed)      |
 
-Rules enforced by the schema:
+Rules enforced when an example is loaded:
 
 - Unknown fields are rejected, so a typo like `refrence_answer` fails loudly.
 - Text fields cannot be blank. Surrounding whitespace is removed.
-- IDs are lowercase words separated by single hyphens, like `withdraw-001`.
+- IDs are lowercase words separated by single hyphens, like `withdraw-001`, and must be
+  unique within a file.
 - Every category except `unanswerable` needs at least one piece of evidence.
 - Evidence is a document ID plus an exact quote, not a chunk ID, so it stays valid no
   matter how a RAG system splits documents into chunks.
 - Examples are immutable after loading.
+
+Rules for the file itself:
+
+- Blank lines are ignored, and both Unix and Windows line endings are accepted.
+- The file must be UTF-8 and contain at least one example.
+- Every problem in the file is reported together, with its line number, for example
+  `line 7: evidence.0.quote: String should have at least 1 character`.
 
 ## Development
 
