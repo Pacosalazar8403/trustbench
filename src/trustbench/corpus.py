@@ -1,17 +1,33 @@
-"""Extract normalized text from saved HTML pages for the evidence corpus.
+"""Build the evidence corpus from saved HTML pages.
 
 Evidence quotes must match their source page exactly, but raw HTML hides text behind tags
 (`C<span>ourse`), entities (`&amp;`, `&nbsp;`), and typographic characters (curly quotes).
-This module turns a page into the plain text a reader sees, one block per line, and
-defines the normalization used to compare quotes against documents.
+This module turns each saved page into the plain text a reader sees, one block per line,
+and defines the normalization used to compare quotes against documents.
+
+A corpus folder holds `sources.txt` (one `doc_id url` per line) and `raw/<doc_id>.html`
+(the downloaded pages). Building it writes `text/<doc_id>.txt` and `manifest.jsonl`, which
+records each document's URL, download time, and a SHA-256 hash of its extracted text. Only
+`sources.txt` and the manifest are committed; anyone who downloads the same pages can
+rebuild the text and compare hashes to see exactly which pages changed.
 """
 
+import argparse
 import hashlib
 import re
 import unicodedata
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 
 from bs4 import BeautifulSoup, Tag
+from pydantic import BaseModel, ConfigDict
+
+SOURCES_FILE = "sources.txt"
+MANIFEST_FILE = "manifest.jsonl"
+RAW_DIR = "raw"
+TEXT_DIR = "text"
 
 # Characters that look the same to a reader but are different bytes.
 _TYPOGRAPHY = str.maketrans(
@@ -25,6 +41,7 @@ _TYPOGRAPHY = str.maketrans(
     }
 )
 _WHITESPACE = re.compile(r"\s+")
+_DOC_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 # Elements that never contain page text a reader would quote.
 _REMOVED = ["script", "style", "noscript", "template", "svg", "nav", "footer"]
@@ -57,6 +74,26 @@ _BLOCKS = [
     "table",
     "ul",
 ]
+
+
+@dataclass(frozen=True)
+class Source:
+    """A document in the corpus: its id and the URL its page was downloaded from."""
+
+    doc_id: str
+    url: str
+
+
+class ManifestEntry(BaseModel):
+    """One document in the corpus manifest."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    doc_id: str
+    url: str
+    fetched_at: datetime
+    sha256: str
+    characters: int
 
 
 def normalize_text(text: str) -> str:
@@ -103,6 +140,98 @@ def text_sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def read_sources(path: Path) -> list[Source]:
+    """Read `doc_id url` lines. Blank lines and lines starting with `#` are skipped."""
+    sources: list[Source] = []
+    first_seen: dict[str, int] = {}
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split()
+        if len(parts) != 2:
+            raise ValueError(f"{path}:{number}: expected 'doc_id url', got {stripped!r}")
+        doc_id, url = parts
+        if not _DOC_ID.match(doc_id):
+            raise ValueError(f"{path}:{number}: invalid doc_id {doc_id!r}")
+        if not url.startswith(("https://", "http://")):
+            raise ValueError(f"{path}:{number}: URL must start with http:// or https://")
+        if doc_id in first_seen:
+            first = first_seen[doc_id]
+            raise ValueError(f"{path}:{number}: duplicate doc_id {doc_id!r} (first on line {first})")
+        first_seen[doc_id] = number
+        sources.append(Source(doc_id, url))
+    return sources
+
+
+def build_corpus(corpus_dir: Path) -> list[ManifestEntry]:
+    """Extract text for every source, write it to `text/`, and write the manifest."""
+    sources = read_sources(corpus_dir / SOURCES_FILE)
+    text_dir = corpus_dir / TEXT_DIR
+    text_dir.mkdir(exist_ok=True)
+
+    entries: list[ManifestEntry] = []
+    for source in sources:
+        raw_path = corpus_dir / RAW_DIR / f"{source.doc_id}.html"
+        if not raw_path.exists():
+            message = f"no saved page for {source.doc_id!r}: expected {raw_path}"
+            raise FileNotFoundError(message)
+
+        text = extract_text(raw_path.read_text(encoding="utf-8"))
+        if not text:
+            raise ValueError(f"no text extracted from {raw_path}")
+
+        text_path = text_dir / f"{source.doc_id}.txt"
+        text_path.write_text(text, encoding="utf-8", newline="\n")
+        fetched = datetime.fromtimestamp(raw_path.stat().st_mtime, tz=UTC).replace(microsecond=0)
+        entries.append(
+            ManifestEntry(
+                doc_id=source.doc_id,
+                url=source.url,
+                fetched_at=fetched,
+                sha256=text_sha256(text),
+                characters=len(text),
+            )
+        )
+
+    write_manifest(entries, corpus_dir / MANIFEST_FILE)
+    return entries
+
+
+def write_manifest(entries: Iterable[ManifestEntry], path: Path) -> None:
+    """Write one JSON line per manifest entry."""
+    lines = [entry.model_dump_json() for entry in entries]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+
+def read_manifest(path: Path) -> list[ManifestEntry]:
+    """Read a manifest written by `write_manifest`."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return [ManifestEntry.model_validate_json(line) for line in lines if line.strip()]
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Command-line entry point: `python -m trustbench.corpus build <corpus_dir>`."""
+    parser = argparse.ArgumentParser(
+        prog="python -m trustbench.corpus",
+        description="Build the evidence corpus from saved HTML pages.",
+    )
+    commands = parser.add_subparsers(dest="command", required=True)
+    build = commands.add_parser("build", help="extract text and write the manifest")
+    build.add_argument("corpus_dir", type=Path, help="folder with sources.txt and raw/")
+    args = parser.parse_args(argv)
+
+    entries = build_corpus(args.corpus_dir)
+    for entry in entries:
+        print(f"{entry.doc_id:40} {entry.characters:>7} chars  {entry.sha256[:12]}")
+    print(f"{len(entries)} page(s) built into {args.corpus_dir / TEXT_DIR}")
+    return 0
+
+
 def _tags(root: Tag, names: Iterable[str]) -> list[Tag]:
     """Return every descendant tag with one of the given names."""
     return [element for element in root.find_all(list(names)) if isinstance(element, Tag)]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
