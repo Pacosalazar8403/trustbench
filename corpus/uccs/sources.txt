@@ -1,0 +1,18 @@
+# UCCS pages in the evidence corpus: one "doc_id url" per line.
+# The doc_id is the file name used in raw/ and text/, and the doc_id that dataset
+# evidence refers to. Pages that are only menus of links are left out, because they
+# contain no text anyone could quote.
+academic-advising-faq https://advising.uccs.edu/current-student
+academic-advising-first-year https://advising.uccs.edu/first-year-student
+academic-advising-home https://advising.uccs.edu/
+bursar-faq https://bursar.uccs.edu/frequently-asked-questions
+bursar-refunds https://bursar.uccs.edu/refunds
+bursar-withdrawal-refunds https://bursar.uccs.edu/refunds/withdrawal-refunds
+class-registration-guide https://registrar.uccs.edu/class-registration-guide
+housing-application https://residence.uccs.edu/housing-application
+housing-application-faq https://residence.uccs.edu/application-faqs
+military-benefits-forms https://military.uccs.edu/current-students/forms
+registration-drop-withdrawal-policy https://registrar.uccs.edu/withdrawal-policies-and-procedures
+spring-2027-bursar-calendar https://bursar.uccs.edu/calendar/spring-2027
+transfer-student-next-steps https://uccs.edu/admissions-aid/next-steps/transfer
+understanding-course-deadlines https://registrar.uccs.edu/course-deadlines/resources/understanding-course-deadlines
