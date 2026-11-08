@@ -1,0 +1,4 @@
+# Downloaded pages and extracted text stay on the local machine. Only sources.txt and
+# manifest.jsonl are committed (see the README for how to rebuild the corpus).
+raw/
+text/
