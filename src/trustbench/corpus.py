@@ -158,7 +158,9 @@ def read_sources(path: Path) -> list[Source]:
             raise ValueError(f"{path}:{number}: URL must start with http:// or https://")
         if doc_id in first_seen:
             first = first_seen[doc_id]
-            raise ValueError(f"{path}:{number}: duplicate doc_id {doc_id!r} (first on line {first})")
+            raise ValueError(
+                f"{path}:{number}: duplicate doc_id {doc_id!r} (first on line {first})"
+            )
         first_seen[doc_id] = number
         sources.append(Source(doc_id, url))
     return sources
