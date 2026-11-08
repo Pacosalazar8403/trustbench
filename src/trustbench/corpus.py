@@ -27,13 +27,36 @@ _TYPOGRAPHY = str.maketrans(
 _WHITESPACE = re.compile(r"\s+")
 
 # Elements that never contain page text a reader would quote.
-_REMOVED = "script style noscript template svg nav footer".split()
+_REMOVED = ["script", "style", "noscript", "template", "svg", "nav", "footer"]
 
 # Elements that start a new line when a browser renders them.
-_BLOCKS = (
-    "address article aside blockquote dd details div dl dt figcaption figure "
-    "h1 h2 h3 h4 h5 h6 li ol p pre section summary table ul"
-).split()
+_BLOCKS = [
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "dd",
+    "details",
+    "div",
+    "dl",
+    "dt",
+    "figcaption",
+    "figure",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "li",
+    "ol",
+    "p",
+    "pre",
+    "section",
+    "summary",
+    "table",
+    "ul",
+]
 
 
 def normalize_text(text: str) -> str:
