@@ -1,19 +1,23 @@
-"""Build the evidence corpus from saved HTML pages.
+"""Build the evidence corpus from saved HTML pages and PDF documents.
 
-Evidence quotes must match their source page exactly, but raw HTML hides text behind tags
-(`C<span>ourse`), entities (`&amp;`, `&nbsp;`), and typographic characters (curly quotes).
-This module turns each saved page into the plain text a reader sees, one block per line,
-and defines the normalization used to compare quotes against documents.
+Evidence quotes must match their source exactly, but raw HTML hides text behind tags
+(`C<span>ourse`), entities (`&amp;`, `&nbsp;`), and typographic characters (curly quotes),
+and PDFs store text as positioned fragments rather than sentences. This module turns each
+saved document into the plain text a reader sees, one block or line per line, and defines
+the normalization used to compare quotes against documents.
 
 A corpus folder holds `sources.txt` (one `doc_id url` per line) and `raw/<doc_id>.html`
-(the downloaded pages). Building it writes `text/<doc_id>.txt` and `manifest.jsonl`, which
-records each document's URL, download time, and a SHA-256 hash of its extracted text. Only
-`sources.txt` and the manifest are committed; anyone who downloads the same pages can
-rebuild the text and compare hashes to see exactly which pages changed.
+(the downloaded documents). A saved file is read as a PDF when its content starts with the
+PDF signature `%PDF-`, whatever its file name says, because a download script saves every
+URL under the same extension. Building the corpus writes `text/<doc_id>.txt` and
+`manifest.jsonl`, which records each document's URL, download time, and a SHA-256 hash of
+its extracted text. Only `sources.txt` and the manifest are committed; anyone who downloads
+the same documents can rebuild the text and compare hashes to see exactly which changed.
 """
 
 import argparse
 import hashlib
+import io
 import re
 import unicodedata
 from collections.abc import Iterable, Sequence
@@ -23,11 +27,14 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup, Tag
 from pydantic import BaseModel, ConfigDict
+from pypdf import PdfReader
+from pypdf.errors import PyPdfError
 
 SOURCES_FILE = "sources.txt"
 MANIFEST_FILE = "manifest.jsonl"
 RAW_DIR = "raw"
 TEXT_DIR = "text"
+PDF_SIGNATURE = b"%PDF-"
 
 # Characters that look the same to a reader but are different bytes.
 _TYPOGRAPHY = str.maketrans(
@@ -78,7 +85,7 @@ _BLOCKS = [
 
 @dataclass(frozen=True)
 class Source:
-    """A document in the corpus: its id and the URL its page was downloaded from."""
+    """A document in the corpus: its id and the URL it was downloaded from."""
 
     doc_id: str
     url: str
@@ -99,9 +106,10 @@ class ManifestEntry(BaseModel):
 def normalize_text(text: str) -> str:
     """Normalize text so that quotes can be matched exactly against documents.
 
-    Applies Unicode NFKC (which turns non-breaking spaces into spaces), replaces curly
-    quotes and long dashes with plain ASCII, and collapses every run of whitespace into a
-    single space. Letter case and all other punctuation are kept as they are.
+    Applies Unicode NFKC (which turns non-breaking spaces into spaces and typographic
+    ligatures, common in PDFs, into separate letters), replaces curly quotes and long dashes
+    with plain ASCII, and collapses every run of whitespace into a single space. Letter case
+    and all other punctuation are kept as they are.
     """
     text = unicodedata.normalize("NFKC", text).translate(_TYPOGRAPHY)
     return _WHITESPACE.sub(" ", text).strip()
@@ -130,9 +138,34 @@ def extract_text(html: str) -> str:
         cells = (normalize_text(cell.get_text()) for cell in _tags(row, ["td", "th"]))
         row.replace_with("\n" + " | ".join(cell for cell in cells if cell) + "\n")
 
-    lines = (normalize_text(line) for line in root.get_text().splitlines())
-    kept = [line for line in lines if line]
-    return "\n".join(kept) + "\n" if kept else ""
+    return _join_lines(root.get_text().splitlines())
+
+
+def extract_pdf_text(data: bytes) -> str:
+    """Return the text of every page of a PDF, in page order, one text line per line.
+
+    A sentence that wraps onto the next line still matches a quote, because normalization
+    turns the line break into a single space. A scanned PDF has no text layer, so it
+    yields an empty string. Raises ValueError if the file cannot be read as a PDF.
+    """
+    try:
+        reader = PdfReader(io.BytesIO(data))
+        pages = [page.extract_text() for page in reader.pages]
+    except PyPdfError as error:
+        raise ValueError(f"could not read PDF: {error}") from error
+    return _join_lines(line for page in pages for line in page.splitlines())
+
+
+def is_pdf(data: bytes) -> bool:
+    """Return True if the bytes are a PDF, judged by the signature at their start."""
+    return data.lstrip().startswith(PDF_SIGNATURE)
+
+
+def extract_document(data: bytes) -> str:
+    """Extract text from a saved document, choosing PDF or HTML by its content."""
+    if is_pdf(data):
+        return extract_pdf_text(data)
+    return extract_text(data.decode("utf-8"))
 
 
 def text_sha256(text: str) -> str:
@@ -179,9 +212,14 @@ def build_corpus(corpus_dir: Path) -> list[ManifestEntry]:
             message = f"no saved page for {source.doc_id!r}: expected {raw_path}"
             raise FileNotFoundError(message)
 
-        text = extract_text(raw_path.read_text(encoding="utf-8"))
+        data = raw_path.read_bytes()
+        try:
+            text = extract_document(data)
+        except ValueError as error:
+            raise ValueError(f"{raw_path}: {error}") from error
         if not text:
-            raise ValueError(f"no text extracted from {raw_path}")
+            hint = " (a scanned PDF has no text layer)" if is_pdf(data) else ""
+            raise ValueError(f"no text extracted from {raw_path}{hint}")
 
         text_path = text_dir / f"{source.doc_id}.txt"
         text_path.write_text(text, encoding="utf-8", newline="\n")
@@ -216,7 +254,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Command-line entry point: `python -m trustbench.corpus build <corpus_dir>`."""
     parser = argparse.ArgumentParser(
         prog="python -m trustbench.corpus",
-        description="Build the evidence corpus from saved HTML pages.",
+        description="Build the evidence corpus from saved HTML pages and PDF documents.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
     build = commands.add_parser("build", help="extract text and write the manifest")
@@ -228,6 +266,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"{entry.doc_id:40} {entry.characters:>7} chars  {entry.sha256[:12]}")
     print(f"{len(entries)} page(s) built into {args.corpus_dir / TEXT_DIR}")
     return 0
+
+
+def _join_lines(lines: Iterable[str]) -> str:
+    """Normalize each line, drop empty ones, and join the rest with a final newline."""
+    kept = [normalized for line in lines if (normalized := normalize_text(line))]
+    return "\n".join(kept) + "\n" if kept else ""
 
 
 def _tags(root: Tag, names: Iterable[str]) -> list[Tag]:
