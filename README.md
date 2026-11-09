@@ -14,8 +14,8 @@ significantly.
 Pre-alpha. This repository currently contains the project skeleton, its quality tooling,
 the dataset schema and loader, the evidence corpus tooling, an evidence verifier, a first
 dataset of 40 verified examples with its version and dev/test split, and the first
-statistical method (a paired bootstrap, with a measured coverage study). Everything under
-"Planned" is not built yet.
+statistical methods: a paired bootstrap with a measured coverage study, McNemar's exact
+test, and Holm correction. Everything under "Planned" is not built yet.
 
 ## Current
 
@@ -35,6 +35,8 @@ statistical method (a paired bootstrap, with a measured coverage study). Everyth
 - Paired bootstrap confidence intervals for the difference between two systems, and a
   coverage study that measures how often those intervals are actually right (see
   "Statistics" below)
+- McNemar's exact test for paired pass/fail results, and Holm correction for comparing
+  many slices at once
 - Tests with pytest (strict markers and config), including consistency checks between the
   committed dataset, source list, and manifest
 - pre-commit hooks on every commit: file hygiene (final newlines, trailing whitespace,
@@ -47,10 +49,10 @@ statistical method (a paired bootstrap, with a measured coverage study). Everyth
 
 ## Planned
 
+- Power analysis: the smallest difference a dataset of a given size can reliably detect
 - Grow the dataset to 200+ examples, with more multi-passage, conditional, and
   false-premise questions
-- McNemar's test for paired pass/fail results, and Holm correction for slices
-- Noise baseline (same config, repeated runs) and power analysis (minimum detectable effect)
+- Noise baseline (same config, repeated runs)
 - Deterministic scorers plus an LLM judge calibrated against human labels (Cohen's kappa)
 - Output caching keyed by config, model, prompt, and dataset version
 - CLI: `trustbench run` and `trustbench compare`
@@ -95,6 +97,45 @@ disagree at all, so the bootstrap sees no variation and reports a zero-width int
 **Until the test split is much larger, a bootstrap interval on it must not be read as a
 95% interval.** The tests pin both results, so this warning stays backed by code.
 
+### McNemar's exact test
+
+`trustbench.significance.mcnemar_exact(baseline, candidate)` takes the two systems'
+pass/fail results on the same examples and returns the number of **wins** (examples only
+the candidate passes), **losses** (examples only the baseline passes), and a two-sided
+p-value, for example `wins 9, losses 1, p = 0.0215`.
+
+- **Only disagreements count.** Examples both systems pass, or both fail, say nothing about
+  which system is better. If the systems were equally good, each disagreement would be a
+  win or a loss with equal chance, and the p-value is the chance of a split at least as
+  lopsided as the observed one.
+- **Exact at any size.** The p-value is computed from whole-number binomial coefficients,
+  not from the chi-square approximation that most textbooks show, which is unreliable when
+  disagreements are few. A test checks that when the systems are truly equal, the test
+  raises a false alarm in at most 5% of simulated experiments.
+- **The cost of being exact on small data is power.** A two-sided test at the 5% level needs
+  at least **6 disagreements, all in the same direction**, before it can report a
+  significant difference (5 give p = 0.0625, 6 give p = 0.031). On the 13-example test
+  split, a regression is detectable only if the systems disagree on nearly half the
+  examples. The tests pin this boundary.
+
+### Holm correction for slices
+
+Comparing two systems separately on each category multiplies the chances of a false alarm:
+six tests at the 5% level have about a 26% chance that at least one looks significant by
+luck. `trustbench.significance.holm_adjust(p_values)` returns adjusted p-values in the same
+order as the input, and rejecting every slice whose adjusted p-value is at most 0.05 keeps
+the chance of **any** false alarm across all slices at 5%, however the slices are related.
+Holm gives the same guarantee as the simpler Bonferroni correction while never rejecting
+less often.
+
+### Which method answers which question
+
+| Question                                              | Method                     |
+|-------------------------------------------------------|----------------------------|
+| How big is the difference, and how sure are we?       | Paired bootstrap interval  |
+| Did the pass rate change, even on a small dataset?    | McNemar's exact test       |
+| Which slices changed, with many slices compared?      | McNemar per slice, then Holm |
+
 ## Dataset
 
 `data/uccs.jsonl` holds 40 questions about UCCS registration, deadlines, billing, housing,
@@ -138,8 +179,9 @@ Difficulty: 22 easy, 16 medium, 2 hard.
 These are stated so that results are not over-read:
 
 - **Small.** With 40 examples (13 in test), only large differences between systems can be
-  detected, and bootstrap intervals on the test split are far less reliable than their
-  stated level (see "Measured coverage" above).
+  detected: McNemar's test needs at least 6 one-way disagreements, and bootstrap intervals
+  on the test split are far less reliable than their stated level (see "Statistics"
+  above).
 - **Unbalanced test split.** The test split has no conditional, false-premise, or
   multi-passage examples yet, so no held-out claim can be made about those categories. The
   split favors stability over balance (stratifying would move examples whenever new ones
@@ -267,8 +309,8 @@ uv sync --locked
 uv run pre-commit install
 ```
 
-After `pre-commit install`, every commit runs the hooks automatically. To run the same
-checks CI runs:
+After `pre-commit install`, every commit runs the hooks automatically. The hooks do not run
+the tests, so run them before committing. To run the same checks CI runs:
 
 ```bash
 uv run pre-commit run --all-files
