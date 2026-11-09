@@ -12,8 +12,9 @@ significantly.
 ## Status
 
 Pre-alpha. This repository currently contains the project skeleton, its quality tooling,
-the dataset schema and loader, the evidence corpus tooling, an evidence verifier, and a
-first dataset of 40 verified examples. Everything under "Planned" is not built yet.
+the dataset schema and loader, the evidence corpus tooling, an evidence verifier, a first
+dataset of 40 verified examples, and its version and dev/test split. Everything under
+"Planned" is not built yet.
 
 ## Current
 
@@ -21,6 +22,9 @@ first dataset of 40 verified examples. Everything under "Planned" is not built y
 - Dataset example schema with Pydantic validation (see "Dataset format" below)
 - JSONL dataset loader that validates every line and reports all problems at once, each
   with its line number
+- Content-hash dataset version that changes only when example content changes
+- Stable, group-aware dev/test split (40% of groups held out for test), with a check that
+  examples sharing evidence share a group
 - Evidence corpus tooling: extracts readable text from saved HTML pages, normalizes it for
   exact quote matching, and records a SHA-256 manifest (see "Evidence corpus" below)
 - Evidence verifier that checks every quote in a dataset against its corpus document and
@@ -41,7 +45,6 @@ first dataset of 40 verified examples. Everything under "Planned" is not built y
 
 - Grow the dataset to 200+ examples, with more multi-passage, conditional, and
   false-premise questions
-- A content-hash dataset version and a fixed dev split and held-out test split
 - Paired bootstrap confidence intervals, McNemar's test, and Holm correction for slices
 - Noise baseline (same config, repeated runs) and power analysis (minimum detectable effect)
 - Deterministic scorers plus an LLM judge calibrated against human labels (Cohen's kappa)
@@ -58,21 +61,47 @@ advising, and military benefits. Every question, reference answer, and evidence 
 written by hand by the author, a UCCS student, and every quote was verified against the
 corpus snapshot with the evidence verifier.
 
-| Category        | Examples |
-|-----------------|----------|
-| `lookup`        | 26       |
-| `unanswerable`  | 6        |
-| `paraphrase`    | 3        |
-| `conditional`   | 2        |
-| `false_premise` | 2        |
-| `multi_passage` | 1        |
+To see the dataset version, the split, and any evidence conflicts:
+
+```bash
+uv run python -m trustbench.splits data/uccs.jsonl
+```
+
+| Category        | Dev | Test |
+|-----------------|-----|------|
+| `lookup`        | 18  | 8    |
+| `unanswerable`  | 3   | 3    |
+| `paraphrase`    | 1   | 2    |
+| `conditional`   | 2   | 0    |
+| `false_premise` | 2   | 0    |
+| `multi_passage` | 1   | 0    |
+| **Total**       | 27  | 13   |
 
 Difficulty: 22 easy, 16 medium, 2 hard.
 
-Known limitations, stated so that results are not over-read:
+### Version and split
 
-- **Small.** With 40 examples, only large differences between systems can be detected
-  reliably. Any comparison reported on this version must say so.
+- **Version:** a 16-character content hash. Examples are sorted by ID and serialized
+  canonically, so line order, key order, and whitespace in the file do not change the
+  version; any change to any example does. Results will be tagged with this version.
+- **Split:** each group (an example's `group`, or its own ID) is hashed with a fixed salt,
+  and about 40% of groups go to **test**. A group's split depends only on its own name, so
+  adding or removing other examples never moves an existing one. Dev is for building and
+  tuning systems; test is held out for final claims.
+- **Groups:** examples that quote the same sentence must share a group, so a near-copy of a
+  test question can never sit in dev. CI enforces this. Before groups were added, two
+  examples quoting the same census-date sentence were split across dev and test.
+
+### Known limitations
+
+These are stated so that results are not over-read:
+
+- **Small.** With 40 examples (13 in test), only large differences between systems can be
+  detected reliably. Any comparison reported on this version must say so.
+- **Unbalanced test split.** The test split has no conditional, false-premise, or
+  multi-passage examples yet, so no held-out claim can be made about those categories. The
+  split favors stability over balance (stratifying would move examples whenever new ones
+  are added), so balance has to come from adding more of those examples.
 - **Lookup-heavy.** About two thirds of the examples are direct lookups, which most systems
   answer well. The harder categories are underrepresented.
 - **One author.** The labels have not been checked by a second person, so there is no
@@ -108,6 +137,8 @@ Rules enforced when an example is loaded:
 - Text fields cannot be blank. Surrounding whitespace is removed.
 - IDs are lowercase words separated by single hyphens, like `withdraw-001`, and must be
   unique within a file.
+- `group` is optional and uses the same format as IDs. Examples with the same group always
+  land in the same split.
 - Every category except `unanswerable` needs at least one piece of evidence.
 - Evidence is a document ID plus an exact quote, not a chunk ID, so it stays valid no
   matter how a RAG system splits documents into chunks.
@@ -184,7 +215,8 @@ run (missing files, an invalid dataset, or text that does not match the manifest
 
 This check runs locally, because the page text is not committed. CI runs the checks that
 need only committed files: the dataset loads, every evidence `doc_id` is listed in
-`sources.txt`, and `sources.txt` and the manifest list the same documents.
+`sources.txt`, `sources.txt` and the manifest list the same documents, and examples that
+share evidence share a group.
 
 ## Development
 
