@@ -63,6 +63,10 @@ class Example(BaseModel):
     category: Category
     difficulty: Difficulty
     evidence: tuple[Evidence, ...] = ()
+    # Examples with the same group always land in the same split. Give related examples
+    # (for example, two questions that quote the same sentence) one shared group, so a
+    # near-copy of a test question can never end up in dev. No group means "my own group".
+    group: ExampleId | None = None
 
     @property
     def answerable(self) -> bool:

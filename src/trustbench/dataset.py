@@ -1,11 +1,13 @@
-"""Load dataset examples from a JSONL file.
+"""Load dataset examples from a JSONL file, and identify a dataset by its content.
 
 Each non-blank line holds one JSON object that must validate as an Example. Problems are
 collected for the whole file and reported together, each with its line number, so a
 dataset author can fix every mistake in one pass.
 """
 
+import hashlib
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -93,6 +95,19 @@ def load_examples(path: Path) -> tuple[Example, ...]:
     if issues:
         raise DatasetError(path, issues)
     return tuple(examples)
+
+
+def dataset_version(examples: Iterable[Example]) -> str:
+    """Return a short content hash that identifies exactly this set of examples.
+
+    Examples are sorted by id and serialized canonically, so the version depends only on
+    the examples themselves, not on line order, key order, or whitespace in the file.
+    The first 16 hex characters (64 bits) of the SHA-256 digest are plenty to tell
+    versions apart while staying readable in logs and reports.
+    """
+    ordered = sorted(examples, key=lambda example: example.id)
+    canonical = "\n".join(example.model_dump_json() for example in ordered)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 def _describe(error: ErrorDetails) -> str:

@@ -123,3 +123,13 @@ def test_examples_are_immutable() -> None:
 
     with pytest.raises(ValidationError, match="frozen"):
         example.question = "Something else?"  # type: ignore[misc]
+
+
+def test_group_is_optional() -> None:
+    assert Example.model_validate(make_example()).group is None
+    assert Example.model_validate(make_example(group="census-refund")).group == "census-refund"
+
+
+def test_malformed_group_is_rejected() -> None:
+    with pytest.raises(ValidationError, match=r"\ngroup\n"):
+        Example.model_validate(make_example(group="Census Refund"))
