@@ -25,10 +25,10 @@ corpus. Everything under "Planned" is not built yet.
   exact quote matching, and records a SHA-256 manifest (see "Evidence corpus" below)
 - A manifest for a snapshot of 14 public UCCS pages
 - Tests with pytest (strict markers and config)
-- Linting and formatting with ruff, strict type checking with mypy (pydantic plugin)
-- pre-commit hooks for file hygiene: final newlines, trailing whitespace, valid YAML and
-  TOML, merge-conflict markers, and large files
-- CI on every pull request: `lint` (pre-commit, ruff, mypy) and `test` (pytest), with all
+- pre-commit hooks on every commit: file hygiene (final newlines, trailing whitespace,
+  valid YAML and TOML, merge-conflict markers, large files) plus ruff lint, ruff format,
+  and strict mypy, run through uv so they use the exact versions in `uv.lock`
+- CI on every pull request: `lint` (all pre-commit hooks) and `test` (pytest), with all
   actions pinned by commit SHA and read-only permissions
 - `main` is protected: changes land only through squash-merged pull requests with passing
   checks
@@ -138,12 +138,10 @@ uv sync --locked
 uv run pre-commit install
 ```
 
-Run the same checks CI runs:
+After `pre-commit install`, every commit runs the hooks automatically. To run the same
+checks CI runs:
 
 ```bash
 uv run pre-commit run --all-files
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy
 uv run pytest
 ```
