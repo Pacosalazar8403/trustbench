@@ -13,7 +13,8 @@ significantly.
 
 Pre-alpha. This repository currently contains the project skeleton, its quality tooling,
 the dataset schema and loader, the evidence corpus tooling, an evidence verifier, a first
-dataset of 40 verified examples, and its version and dev/test split. Everything under
+dataset of 40 verified examples with its version and dev/test split, and the first
+statistical method (a paired bootstrap, with a measured coverage study). Everything under
 "Planned" is not built yet.
 
 ## Current
@@ -31,6 +32,9 @@ dataset of 40 verified examples, and its version and dev/test split. Everything 
   shows where a failing quote stops matching
 - A first dataset of 40 hand-written examples on 14 public UCCS pages, with every evidence
   quote verified (see "Dataset" below)
+- Paired bootstrap confidence intervals for the difference between two systems, and a
+  coverage study that measures how often those intervals are actually right (see
+  "Statistics" below)
 - Tests with pytest (strict markers and config), including consistency checks between the
   committed dataset, source list, and manifest
 - pre-commit hooks on every commit: file hygiene (final newlines, trailing whitespace,
@@ -45,7 +49,7 @@ dataset of 40 verified examples, and its version and dev/test split. Everything 
 
 - Grow the dataset to 200+ examples, with more multi-passage, conditional, and
   false-premise questions
-- Paired bootstrap confidence intervals, McNemar's test, and Holm correction for slices
+- McNemar's test for paired pass/fail results, and Holm correction for slices
 - Noise baseline (same config, repeated runs) and power analysis (minimum detectable effect)
 - Deterministic scorers plus an LLM judge calibrated against human labels (Cohen's kappa)
 - Output caching keyed by config, model, prompt, and dataset version
@@ -53,6 +57,43 @@ dataset of 40 verified examples, and its version and dev/test split. Everything 
 - GitHub Action that comments on a PR and fails only on significant regressions
 - Systems under test: [InferX](https://github.com/Pacosalazar8403/inferx) routing policies
   first, then a Policy Assistant RAG system built on the same documents
+
+## Statistics
+
+### Paired bootstrap
+
+`trustbench.stats.paired_bootstrap(baseline, candidate)` takes the two systems' scores on
+the same examples, in the same order, and returns the mean difference (candidate minus
+baseline) with a percentile bootstrap confidence interval, for example
+`+0.050 [-0.010, +0.110] (95% CI)`.
+
+- **Paired:** each resample draws whole examples with replacement, keeping both systems'
+  scores together. A hard question tends to be hard for both systems, so pairing cancels
+  that shared difficulty and the interval measures only how the systems differ.
+- **Reproducible:** a seed fixes the resamples, so the same data always gives the same
+  interval.
+- **Bounded memory:** resamples are drawn in chunks of 1,000.
+
+### Measured coverage
+
+A "95% interval" is only honest if it contains the true difference about 95% of the time.
+`python -m trustbench.coverage` simulates 1,000 experiments per size from a model where
+the candidate is truly better by 0.03, with the two systems agreeing on most examples as
+real systems do, and counts how often the interval contains 0.03:
+
+| Examples | Coverage of a nominal 95% interval |
+|----------|------------------------------------|
+| 13       | 54.8%                              |
+| 40       | 90.5%                              |
+| 100      | 94.7%                              |
+| 250      | 94.5%                              |
+
+At 100 examples and up, the intervals are about as reliable as they claim. At 13 examples,
+the size of the current test split, a "95% interval" contains the truth only about half
+the time: with so few examples, many experiments have no example where the systems
+disagree at all, so the bootstrap sees no variation and reports a zero-width interval.
+**Until the test split is much larger, a bootstrap interval on it must not be read as a
+95% interval.** The tests pin both results, so this warning stays backed by code.
 
 ## Dataset
 
@@ -97,7 +138,8 @@ Difficulty: 22 easy, 16 medium, 2 hard.
 These are stated so that results are not over-read:
 
 - **Small.** With 40 examples (13 in test), only large differences between systems can be
-  detected reliably. Any comparison reported on this version must say so.
+  detected, and bootstrap intervals on the test split are far less reliable than their
+  stated level (see "Measured coverage" above).
 - **Unbalanced test split.** The test split has no conditional, false-premise, or
   multi-passage examples yet, so no held-out claim can be made about those categories. The
   split favors stability over balance (stratifying would move examples whenever new ones
