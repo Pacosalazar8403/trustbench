@@ -172,3 +172,12 @@ def test_main_exits_2_when_the_dataset_is_invalid(
 
     assert main([str(dataset), str(corpus)]) == 2
     assert "invalid JSON" in capsys.readouterr().err
+
+
+def test_main_exits_2_when_the_dataset_file_is_missing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    corpus = make_corpus(tmp_path / "corpus", {"advising-faq": ADVISING_PAGE})
+
+    assert main([str(tmp_path / "missing.jsonl"), str(corpus)]) == 2
+    assert "No such file or directory" in capsys.readouterr().err

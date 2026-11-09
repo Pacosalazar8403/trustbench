@@ -74,7 +74,12 @@ def check_evidence(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Command-line entry point: `python -m trustbench.evidence <dataset> <corpus_dir>`."""
+    """Command-line entry point: `python -m trustbench.evidence <dataset> <corpus_dir>`.
+
+    Exit codes: 0 if every quote is verified, 1 if any quote is not, and 2 if the check
+    could not run at all (missing files, an invalid dataset, or a corpus that does not
+    match its manifest).
+    """
     parser = argparse.ArgumentParser(
         prog="python -m trustbench.evidence",
         description="Check that every evidence quote appears in its corpus document.",
@@ -86,7 +91,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         examples = load_examples(args.dataset)
         documents = load_corpus_text(args.corpus_dir)
-    except (DatasetError, CorpusError) as exc:
+    except (DatasetError, CorpusError, FileNotFoundError) as exc:
         print(exc, file=sys.stderr)
         return 2
 
