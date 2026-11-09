@@ -1,4 +1,4 @@
-# File hygiene checks that run on every commit (and in CI).
+# Checks that run on every commit (and in CI).
 # Install locally with: uv run pre-commit install
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -11,3 +11,26 @@ repos:
       - id: check-toml
       - id: check-merge-conflict
       - id: check-added-large-files
+
+  # Python checks run through uv, so they use the exact versions pinned in uv.lock.
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run --locked ruff check --force-exclude
+        language: unsupported
+        types_or: [python, pyi]
+        require_serial: true
+      - id: ruff-format
+        name: ruff format
+        entry: uv run --locked ruff format --force-exclude
+        language: unsupported
+        types_or: [python, pyi, markdown]
+        require_serial: true
+      - id: mypy
+        name: mypy
+        entry: uv run --locked mypy
+        language: unsupported
+        types_or: [python, pyi]
+        pass_filenames: false
+        require_serial: true
