@@ -15,7 +15,8 @@ Pre-alpha. This repository currently contains the project skeleton, its quality 
 the dataset schema and loader, the evidence corpus tooling, an evidence verifier, a first
 dataset of 40 verified examples with its version and dev/test split, and the first
 statistical methods: a paired bootstrap with a measured coverage study, McNemar's exact
-test, and Holm correction. Everything under "Planned" is not built yet.
+test, Holm correction, and an exact power analysis. Everything under "Planned" is not built
+yet.
 
 ## Current
 
@@ -37,6 +38,8 @@ test, and Holm correction. Everything under "Planned" is not built yet.
   "Statistics" below)
 - McNemar's exact test for paired pass/fail results, and Holm correction for comparing
   many slices at once
+- Exact power analysis for McNemar's test: the smallest pass-rate drop a dataset of a given
+  size can reliably detect
 - Tests with pytest (strict markers and config), including consistency checks between the
   committed dataset, source list, and manifest
 - pre-commit hooks on every commit: file hygiene (final newlines, trailing whitespace,
@@ -49,10 +52,10 @@ test, and Holm correction. Everything under "Planned" is not built yet.
 
 ## Planned
 
-- Power analysis: the smallest difference a dataset of a given size can reliably detect
-- Grow the dataset to 200+ examples, with more multi-passage, conditional, and
-  false-premise questions
-- Noise baseline (same config, repeated runs)
+- Grow the dataset to 250+ examples, with more multi-passage, conditional, and
+  false-premise questions (the power analysis below shows why 40 is not enough)
+- Noise baseline (same config, repeated runs), which also measures the real disagreement
+  rate the power analysis currently assumes
 - Deterministic scorers plus an LLM judge calibrated against human labels (Cohen's kappa)
 - Output caching keyed by config, model, prompt, and dataset version
 - CLI: `trustbench run` and `trustbench compare`
@@ -114,9 +117,8 @@ p-value, for example `wins 9, losses 1, p = 0.0215`.
   raises a false alarm in at most 5% of simulated experiments.
 - **The cost of being exact on small data is power.** A two-sided test at the 5% level needs
   at least **6 disagreements, all in the same direction**, before it can report a
-  significant difference (5 give p = 0.0625, 6 give p = 0.031). On the 13-example test
-  split, a regression is detectable only if the systems disagree on nearly half the
-  examples. The tests pin this boundary.
+  significant difference (5 give p = 0.0625, 6 give p = 0.031). The tests pin this
+  boundary.
 
 ### Holm correction for slices
 
@@ -128,13 +130,45 @@ the chance of **any** false alarm across all slices at 5%, however the slices ar
 Holm gives the same guarantee as the simpler Bonferroni correction while never rejecting
 less often.
 
+### Power analysis
+
+A gate that finds no significant regression has only proved something if it could have
+found one. **Power** is the chance that McNemar's test reports a difference when a real one
+exists, and the **minimum detectable drop** is the smallest real fall in pass rate that it
+catches with 80% power. `python -m trustbench.power` computes it exactly, by summing over
+every possible number of disagreements and every split of them, with no simulation; a test
+checks the exact result against simulation anyway, and another checks that its rejection
+rule agrees with `mcnemar_exact` on every split up to 30 disagreements.
+
+Power depends on how often the two systems disagree, which is an **assumption** until real
+systems are run (`--disagreement-rate` changes it). Minimum detectable drop, in percentage
+points of pass rate, at 80% power and a two-sided 5% level:
+
+| Examples | 20% disagreement | 10% disagreement |
+|----------|------------------|------------------|
+| 13       | not detectable   | not detectable   |
+| 40       | 19.6             | not detectable   |
+| 100      | 12.8             | 8.9              |
+| 250      | 8.2              | 5.8              |
+| 500      | 5.8              | 4.1              |
+| 1000     | 4.1              | 2.9              |
+
+- **The current test split cannot detect any regression.** With 13 examples, even a
+  candidate that loses every disagreement is caught less than 80% of the time.
+- **Fewer disagreements hurt small datasets and help large ones.** Rare disagreements often
+  fall short of the 6 that McNemar's test needs, but when there are enough examples, a
+  real drop between similar systems shows up as a very lopsided split.
+- **Catching a 5-point drop takes roughly 500 to 1,000 examples**, which sets the goal for
+  growing the dataset.
+
 ### Which method answers which question
 
-| Question                                              | Method                     |
-|-------------------------------------------------------|----------------------------|
-| How big is the difference, and how sure are we?       | Paired bootstrap interval  |
-| Did the pass rate change, even on a small dataset?    | McNemar's exact test       |
+| Question                                              | Method                       |
+|-------------------------------------------------------|------------------------------|
+| How big is the difference, and how sure are we?       | Paired bootstrap interval    |
+| Did the pass rate change, even on a small dataset?    | McNemar's exact test         |
 | Which slices changed, with many slices compared?      | McNemar per slice, then Holm |
+| Could this dataset have caught a regression at all?   | Power analysis               |
 
 ## Dataset
 
@@ -178,10 +212,9 @@ Difficulty: 22 easy, 16 medium, 2 hard.
 
 These are stated so that results are not over-read:
 
-- **Small.** With 40 examples (13 in test), only large differences between systems can be
-  detected: McNemar's test needs at least 6 one-way disagreements, and bootstrap intervals
-  on the test split are far less reliable than their stated level (see "Statistics"
-  above).
+- **Too small to detect regressions.** With 40 examples (13 in test), the power analysis
+  shows that no regression on the test split can be reliably detected, and bootstrap
+  intervals on it are far less reliable than their stated level (see "Statistics" above).
 - **Unbalanced test split.** The test split has no conditional, false-premise, or
   multi-passage examples yet, so no held-out claim can be made about those categories. The
   split favors stability over balance (stratifying would move examples whenever new ones
