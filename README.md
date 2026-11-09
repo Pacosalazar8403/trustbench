@@ -12,8 +12,8 @@ significantly.
 ## Status
 
 Pre-alpha. This repository currently contains the project skeleton, its quality tooling,
-the schema and loader for dataset examples, and the tooling and manifest for the evidence
-corpus. Everything under "Planned" is not built yet.
+the dataset schema and loader, the evidence corpus tooling, an evidence verifier, and a
+first dataset of 40 verified examples. Everything under "Planned" is not built yet.
 
 ## Current
 
@@ -23,8 +23,12 @@ corpus. Everything under "Planned" is not built yet.
   with its line number
 - Evidence corpus tooling: extracts readable text from saved HTML pages, normalizes it for
   exact quote matching, and records a SHA-256 manifest (see "Evidence corpus" below)
-- A manifest for a snapshot of 14 public UCCS pages
-- Tests with pytest (strict markers and config)
+- Evidence verifier that checks every quote in a dataset against its corpus document and
+  shows where a failing quote stops matching
+- A first dataset of 40 hand-written examples on 14 public UCCS pages, with every evidence
+  quote verified (see "Dataset" below)
+- Tests with pytest (strict markers and config), including consistency checks between the
+  committed dataset, source list, and manifest
 - pre-commit hooks on every commit: file hygiene (final newlines, trailing whitespace,
   valid YAML and TOML, merge-conflict markers, large files) plus ruff lint, ruff format,
   and strict mypy, run through uv so they use the exact versions in `uv.lock`
@@ -35,9 +39,9 @@ corpus. Everything under "Planned" is not built yet.
 
 ## Planned
 
-- Automatic check that every evidence quote appears in its document
-- Versioned, hand-verified dataset built on the UCCS corpus, with a fixed dev split and a
-  held-out test split
+- Grow the dataset to 200+ examples, with more multi-passage, conditional, and
+  false-premise questions
+- A content-hash dataset version and a fixed dev split and held-out test split
 - Paired bootstrap confidence intervals, McNemar's test, and Holm correction for slices
 - Noise baseline (same config, repeated runs) and power analysis (minimum detectable effect)
 - Deterministic scorers plus an LLM judge calibrated against human labels (Cohen's kappa)
@@ -46,6 +50,39 @@ corpus. Everything under "Planned" is not built yet.
 - GitHub Action that comments on a PR and fails only on significant regressions
 - Systems under test: [InferX](https://github.com/Pacosalazar8403/inferx) routing policies
   first, then a Policy Assistant RAG system built on the same documents
+
+## Dataset
+
+`data/uccs.jsonl` holds 40 questions about UCCS registration, deadlines, billing, housing,
+advising, and military benefits. Every question, reference answer, and evidence quote was
+written by hand by the author, a UCCS student, and every quote was verified against the
+corpus snapshot with the evidence verifier.
+
+| Category        | Examples |
+|-----------------|----------|
+| `lookup`        | 26       |
+| `unanswerable`  | 6        |
+| `paraphrase`    | 3        |
+| `conditional`   | 2        |
+| `false_premise` | 2        |
+| `multi_passage` | 1        |
+
+Difficulty: 22 easy, 16 medium, 2 hard.
+
+Known limitations, stated so that results are not over-read:
+
+- **Small.** With 40 examples, only large differences between systems can be detected
+  reliably. Any comparison reported on this version must say so.
+- **Lookup-heavy.** About two thirds of the examples are direct lookups, which most systems
+  answer well. The harder categories are underrepresented.
+- **One author.** The labels have not been checked by a second person, so there is no
+  inter-annotator agreement measurement yet.
+- **Time-sensitive.** Some answers depend on the Spring 2027 calendar and on pages that
+  can change. The corpus manifest records exactly which snapshot the dataset was written
+  against.
+- **Sources disagree.** At least one other UCCS page states the first-year housing age
+  requirement differently from the page this dataset cites; that page is left out of the
+  corpus until the conflict is handled.
 
 ## Dataset format
 
@@ -130,6 +167,24 @@ quote that differs from its page in meaning-bearing ways still fails.
 
 Known limitations: pages that load their content with JavaScript cannot be captured with a
 plain download, and pages that are only menus of links are left out of the corpus.
+
+### Verifying evidence
+
+With the corpus built locally:
+
+```bash
+uv run python -m trustbench.evidence data/uccs.jsonl corpus/uccs
+```
+
+Each document's text is checked against its manifest hash before any quote is checked.
+A failing quote is reported with where it stops matching, for example
+`the first 38 of 39 characters match; the quote continues '.', the page continues ' What'`.
+Exit codes: 0 if every quote is verified, 1 if any quote is not, 2 if the check could not
+run (missing files, an invalid dataset, or text that does not match the manifest).
+
+This check runs locally, because the page text is not committed. CI runs the checks that
+need only committed files: the dataset loads, every evidence `doc_id` is listed in
+`sources.txt`, and `sources.txt` and the manifest list the same documents.
 
 ## Development
 
