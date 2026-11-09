@@ -9,6 +9,7 @@ from pathlib import Path
 
 from trustbench.corpus import read_manifest, read_sources
 from trustbench.dataset import load_examples
+from trustbench.splits import find_evidence_conflicts
 
 ROOT = Path(__file__).resolve().parent.parent
 DATASET = ROOT / "data" / "uccs.jsonl"
@@ -31,3 +32,9 @@ def test_sources_and_manifest_list_the_same_documents() -> None:
     manifest = [entry.doc_id for entry in read_manifest(CORPUS / "manifest.jsonl")]
 
     assert sources == manifest
+
+
+def test_examples_that_share_evidence_share_a_group() -> None:
+    conflicts = find_evidence_conflicts(load_examples(DATASET))
+
+    assert conflicts == [], "\n".join(str(conflict) for conflict in conflicts)
