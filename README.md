@@ -15,9 +15,10 @@ Pre-alpha. This repository currently contains the project skeleton, its quality 
 the dataset schema and loader, the evidence corpus tooling (HTML pages and PDF documents),
 an evidence verifier, a dataset of 248 verified examples on 101 public UCCS documents with
 its version and dev/test split, deterministic answer scorers, a BM25 retrieval baseline
-with measured recall, and the first statistical methods: a paired bootstrap with a
-measured coverage study, McNemar's exact test, Holm correction, and an exact power
-analysis. Everything under "Planned" is not built yet.
+with measured recall, a model runner with an answer cache and a first comparison of two
+local models, and the first statistical methods: a paired bootstrap with a measured
+coverage study, McNemar's exact test, Holm correction, and an exact power analysis.
+Everything under "Planned" is not built yet.
 
 ## Current
 
@@ -40,6 +41,9 @@ analysis. Everything under "Planned" is not built yet.
   reference answer passes its own scorer (see "Scoring" below)
 - BM25 retrieval baseline over the corpus, with recall@k measured at the document level
   and at the quote level (see "Retrieval" below)
+- Model runner: answers each question with a local model served by Ollama from the top 5
+  BM25 chunks, caches every answer under a hash of the model, its settings, and the full
+  prompt, and scores the run with the deterministic scorers (see "Runner" below)
 - Paired bootstrap confidence intervals for the difference between two systems, and a
   coverage study that measures how often those intervals are actually right (see
   "Statistics" below)
@@ -67,8 +71,9 @@ analysis. Everything under "Planned" is not built yet.
   rate the power analysis currently assumes
 - Better retrieval, measured against the BM25 baseline: embedding and hybrid search, and
   chunking by sentence or section
-- Output caching keyed by config, model, prompt, and dataset version
-- CLI: `trustbench run` and `trustbench compare`
+- `trustbench compare`: McNemar's test and the paired bootstrap on two cached runs,
+  automating the comparison under "Runner" that is done by hand today
+- A single `trustbench` command for running, comparing, and checking
 - GitHub Action that comments on a PR and fails only on significant regressions
 - Systems under test: [InferX](https://github.com/Pacosalazar8403/inferx) routing policies
   first, then a Policy Assistant RAG system built on the same documents
@@ -296,6 +301,92 @@ Known limitations:
 - Fixed word windows ignore sentence and section boundaries, and a long quote that crosses
   a window boundary counts as a quote miss even when both halves are retrieved.
 - There is no stemming, so "refund" and "refunds" are different words.
+
+## Runner
+
+`trustbench.runner` turns the dataset into a run of a real system. For each question it
+retrieves the top 5 BM25 chunks, numbers them in a prompt that says to answer only from
+them, and sends the prompt to a model. When the chunks do not contain the answer, the
+prompt asks for one exact sentence, `The documents don't say.`, and a test checks that
+the abstention scorer recognizes it, so the prompt and the scorer cannot drift apart.
+
+```bash
+uv run python -m trustbench.runner data/uccs.jsonl corpus/uccs --model llama3.2:3b
+```
+
+Options: `--split dev|test|all` (default `dev`), `--limit N`, `--k N` (chunks per
+question, default 5), and `--cache PATH` (default `runs/answers.jsonl`, which git
+ignores). Models are served locally by [Ollama](https://ollama.com) with temperature 0
+and a fixed seed, so a run needs no API key and sends no data anywhere.
+
+### Answer cache
+
+Every answer is appended to the cache as soon as it is made, so a run that is stopped
+keeps everything it finished. The cache key hashes exactly what decides the model's
+output: the model's name with its settings, and the full prompt, which already contains
+the question and the retrieved chunks.
+
+- **Rerunning is free.** A second run of the same configuration on the 158 dev questions
+  took 0.1 seconds, every answer from the cache.
+- **A stale answer is never reused.** A different model, temperature, seed, prompt
+  template, chunking, corpus, or retrieved set changes the prompt or the name, and so
+  the key. A larger `k` that retrieves the same chunks gives the same prompt, so it
+  correctly reuses the answer.
+- **The dataset version is recorded, not keyed.** Each answer stores the version it was
+  made with, but editing a reference answer does not discard answers whose prompts did
+  not change, because reference answers are never shown to the model.
+
+### First comparison: llama3.2:1b and llama3.2:3b on dev
+
+Both models answered all 158 dev questions. The deterministic scorers can judge 43 of
+them (9 unanswerable and 34 with key facts):
+
+| Model       | Judged passed | Unanswerable abstained | Key facts passed | Answerable abstained |
+|-------------|---------------|------------------------|------------------|----------------------|
+| llama3.2:1b | 12 / 43 (28%) | 2 / 9                  | 10 / 34          | 5 / 149              |
+| llama3.2:3b | 24 / 43 (56%) | 7 / 9                  | 17 / 34          | 44 / 149             |
+
+On the same 43 examples, 3b passed 12 that 1b failed and failed none that 1b passed.
+McNemar's exact test gives `wins 12, losses 0, p = 0.0005`, so the difference is not
+noise. The power analysis agrees: 43 examples can only detect a large gap, and this gap
+is 28 points.
+
+Crossing abstention with retrieval shows what "better" means here. For each answerable
+dev question, the table checks whether an evidence quote was in the 5 chunks the model
+saw:
+
+| llama3.2:3b               | Answered | Abstained |
+|---------------------------|----------|-----------|
+| Answer in the chunks (85) | 68       | 17        |
+| Answer not in them (64)   | 37       | 27        |
+
+3b abstains correctly far more often than 1b, which answered 61 of the 64 questions whose
+answer it was never shown. But it still answers 37 of those 64 without the evidence, and
+it refuses 17 questions whose answer was in front of it. It is less wrong, not well
+calibrated, and the two failure rates (unsupported answers and refusals) trade against
+each other.
+
+Reading the failures found the same pattern more than once: an answer that cites chunks
+which do not support it. Asked about an enrollment deposit, 1b answered "According to
+documents [1] and [3], you do not have to pay an enrollment deposit", citing chunks about
+direct deposit of refunds. Asked whether international students can get UCCS
+scholarships, 3b joined "international" from one chunk and "apply for scholarships
+through their student portal" from another, and credited the result to the first. The
+citations make an invented answer look checked.
+
+### Known limitations
+
+- **The judged examples are not a random sample.** They are the unanswerable questions
+  and the ones whose reference has numbers, so the comparison above holds for factual
+  lookups and abstention, not for the 115 prose answers that still need a judge.
+- **One run per model, on dev.** Repeated runs (the noise baseline) and the test split
+  come later. Temperature 0 and a fixed seed gave identical answers on repeated calls on
+  this machine, but that is not guaranteed across Ollama versions or hardware.
+- **Answer quality is scored, citations are not.** A wrong citation is only caught when
+  it comes with a wrong answer the scorers can see.
+- **Timings are from one laptop.** One 3b answer of 60 tokens took 192 seconds, which
+  points to a stall on the machine rather than the model, so totals are not a reliable
+  measure of model speed. The cache records seconds and tokens for every answer.
 
 ## Statistics
 
