@@ -11,8 +11,12 @@ the classic keyword ranking used by search engines: a chunk scores higher when i
 the query's rare words, contains them more often, and is shorter. Ties are broken by
 document ID and chunk position, so the same query always returns the same ranking.
 
-Run `python -m trustbench.retrieval data/uccs.jsonl corpus/uccs` to measure recall@k on the
-dev and test splits. It needs the corpus built locally (see the README).
+Recall is measured at two levels. Document recall counts a chunk from any cited document.
+Quote recall counts only a chunk that contains an evidence quote in full, so it misses
+when the right document is found but not the part that answers the question.
+
+Run `python -m trustbench.retrieval data/uccs.jsonl corpus/uccs` to measure both on the dev
+and test splits. It needs the corpus built locally (see the README).
 """
 
 import argparse
@@ -22,7 +26,9 @@ from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
+from trustbench.corpus import normalize_text
 from trustbench.dataset import DatasetError, load_examples
 from trustbench.evidence import CorpusError, load_corpus_text
 from trustbench.schema import Category, Example
@@ -31,6 +37,8 @@ from trustbench.splits import Split, assign_split, group_key
 CHUNK_WORDS = 100
 CHUNK_OVERLAP = 25
 DEFAULT_KS = (1, 3, 5, 10)
+
+Level = Literal["document", "quote"]
 
 _TOKEN = re.compile(r"[a-z0-9]+")
 _STOPWORDS = frozenset(
@@ -165,23 +173,39 @@ def build_index(documents: dict[str, str]) -> BM25:
 
 
 def recall_at_k(
-    index: BM25, examples: Iterable[Example], ks: Sequence[int] = DEFAULT_KS
+    index: BM25,
+    examples: Iterable[Example],
+    ks: Sequence[int] = DEFAULT_KS,
+    level: Level = "document",
 ) -> dict[int, tuple[int, int]]:
-    """For each k, count answerable examples with a correct document in the top k chunks.
+    """For each k, count answerable examples whose answer is found in the top k chunks.
 
-    Returns `{k: (hits, total)}`. Unanswerable examples have no correct document, so they
-    are skipped.
+    With `level="document"`, a hit is any chunk from a document the example cites. With
+    `level="quote"`, a hit is a chunk, from any document, that contains one of the
+    example's evidence quotes in full. Quote level is stricter: it misses when the right
+    document is retrieved but not the part of it that holds the answer, which is what a
+    language model would actually need to read.
+
+    Returns `{k: (hits, total)}`. Unanswerable examples have nothing to find, so they are
+    skipped.
     """
     answerable = [example for example in examples if example.category is not Category.UNANSWERABLE]
     counts = {k: 0 for k in ks}
     deepest = max(ks)
     for example in answerable:
-        gold = {evidence.doc_id for evidence in example.evidence}
-        ranked = [chunk.doc_id for chunk, _ in index.search(example.question, deepest)]
+        ranked = [chunk for chunk, _ in index.search(example.question, deepest)]
         for k in ks:
-            if gold.intersection(ranked[:k]):
+            if _found(example, ranked[:k], level):
                 counts[k] += 1
     return {k: (counts[k], len(answerable)) for k in ks}
+
+
+def _found(example: Example, chunks: Sequence[Chunk], level: Level) -> bool:
+    if level == "document":
+        gold = {evidence.doc_id for evidence in example.evidence}
+        return any(chunk.doc_id in gold for chunk in chunks)
+    quotes = [normalize_text(evidence.quote) for evidence in example.evidence]
+    return any(quote in chunk.text for chunk in chunks for quote in quotes)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -202,17 +226,17 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     index = build_index(documents)
     print(f"{len(index.chunks)} chunks from {len(documents)} documents")
-    print(
-        f"{'split':6} {'examples':>8}  " + "  ".join(f"{'recall@' + str(k):>9}" for k in DEFAULT_KS)
-    )
+    header = "  ".join(f"{'recall@' + str(k):>9}" for k in DEFAULT_KS)
+    print(f"{'split':6} {'level':9} {'examples':>8}  {header}")
     for split in Split:
         subset = [example for example in examples if assign_split(group_key(example)) is split]
-        results = recall_at_k(index, subset)
-        total = next(iter(results.values()))[1]
-        cells = "  ".join(
-            f"{hits / total:>9.1%}" if total else f"{'-':>9}" for hits, _ in results.values()
-        )
-        print(f"{split.value:6} {total:>8}  {cells}")
+        for level in ("document", "quote"):
+            results = recall_at_k(index, subset, level=level)
+            total = next(iter(results.values()))[1]
+            cells = "  ".join(
+                f"{hits / total:>9.1%}" if total else f"{'-':>9}" for hits, _ in results.values()
+            )
+            print(f"{split.value:6} {level:9} {total:>8}  {cells}")
     return 0
 
 

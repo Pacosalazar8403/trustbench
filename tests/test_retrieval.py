@@ -17,7 +17,9 @@ from trustbench.retrieval import (
 from trustbench.schema import Category, Difficulty, Evidence, Example
 
 
-def make_example(example_id: str, question: str, docs: tuple[str, ...]) -> Example:
+def make_example(
+    example_id: str, question: str, docs: tuple[str, ...], quote: str = "q"
+) -> Example:
     category = Category.UNANSWERABLE if not docs else Category.LOOKUP
     return Example(
         id=example_id,
@@ -25,7 +27,7 @@ def make_example(example_id: str, question: str, docs: tuple[str, ...]) -> Examp
         reference_answer="An answer.",
         category=category,
         difficulty=Difficulty.EASY,
-        evidence=tuple(Evidence(doc_id=doc, quote="q") for doc in docs),
+        evidence=tuple(Evidence(doc_id=doc, quote=quote) for doc in docs),
     )
 
 
@@ -114,6 +116,29 @@ def test_recall_counts_hits_at_each_depth_and_skips_unanswerable() -> None:
     assert recall_at_k(index, examples, ks=(1, 3)) == {1: (2, 3), 3: (3, 3)}
 
 
+def test_quote_recall_needs_the_chunk_that_holds_the_quote() -> None:
+    index = BM25(
+        [
+            Chunk("refunds", 0, "refund policy overview for parking permits"),
+            Chunk("refunds", 1, "permits returned before census get a full refund"),
+        ]
+    )
+    example = make_example(
+        "ex-001", "parking permits refund policy", ("refunds",), quote="before census get a full"
+    )
+    assert recall_at_k(index, [example], ks=(1, 2), level="document") == {1: (1, 1), 2: (1, 1)}
+    assert recall_at_k(index, [example], ks=(1, 2), level="quote") == {1: (0, 1), 2: (1, 1)}
+
+
+def test_quote_recall_accepts_the_same_sentence_on_another_page() -> None:
+    index = BM25([Chunk("twin-page", 0, "The census date is the last day to drop")])
+    example = make_example(
+        "ex-001", "last day to drop", ("cited-page",), quote="The census date is the last day"
+    )
+    assert recall_at_k(index, [example], ks=(1,), level="document") == {1: (0, 1)}
+    assert recall_at_k(index, [example], ks=(1,), level="quote") == {1: (1, 1)}
+
+
 def test_main_reports_recall_by_split(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     corpus = tmp_path / "corpus"
     (corpus / "raw").mkdir(parents=True)
@@ -131,6 +156,8 @@ def test_main_reports_recall_by_split(tmp_path: Path, capsys: pytest.CaptureFixt
     assert main([str(dataset), str(corpus)]) == 0
     output = capsys.readouterr().out
     assert "1 chunks from 1 documents" in output
+    assert "document" in output
+    assert "quote" in output
     assert "100.0%" in output
 
 
