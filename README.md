@@ -14,9 +14,9 @@ significantly.
 Pre-alpha. This repository currently contains the project skeleton, its quality tooling,
 the dataset schema and loader, the evidence corpus tooling (HTML pages and PDF documents),
 an evidence verifier, a dataset of 248 verified examples on 101 public UCCS documents with
-its version and dev/test split, and the first statistical methods: a paired bootstrap with
-a measured coverage study, McNemar's exact test, Holm correction, and an exact power
-analysis. Everything under "Planned" is not built yet.
+its version and dev/test split, deterministic answer scorers, and the first statistical
+methods: a paired bootstrap with a measured coverage study, McNemar's exact test, Holm
+correction, and an exact power analysis. Everything under "Planned" is not built yet.
 
 ## Current
 
@@ -34,6 +34,9 @@ analysis. Everything under "Planned" is not built yet.
   shows where a failing quote stops matching
 - A dataset of 248 examples on 101 public UCCS documents (96 web pages and 5 PDFs), with
   every evidence quote verified (see "Dataset" below)
+- Deterministic scorers: abstention for unanswerable questions, and key facts (numbers,
+  money, percentages, phone numbers, emails) for answerable ones, with a check that every
+  reference answer passes its own scorer (see "Scoring" below)
 - Paired bootstrap confidence intervals for the difference between two systems, and a
   coverage study that measures how often those intervals are actually right (see
   "Statistics" below)
@@ -53,16 +56,191 @@ analysis. Everything under "Planned" is not built yet.
 
 ## Planned
 
+- An LLM judge for the 72% of examples the deterministic scorers cannot judge, calibrated
+  against human labels (Cohen's kappa)
 - Grow the dataset toward 500+ examples, with many more false-premise and multi-passage
   questions (the power analysis below shows what each size can detect)
 - Noise baseline (same config, repeated runs), which also measures the real disagreement
   rate the power analysis currently assumes
-- Deterministic scorers plus an LLM judge calibrated against human labels (Cohen's kappa)
 - Output caching keyed by config, model, prompt, and dataset version
 - CLI: `trustbench run` and `trustbench compare`
 - GitHub Action that comments on a PR and fails only on significant regressions
 - Systems under test: [InferX](https://github.com/Pacosalazar8403/inferx) routing policies
   first, then a Policy Assistant RAG system built on the same documents
+
+## Dataset
+
+`data/uccs.jsonl` holds 248 questions about UCCS admissions, financial aid, tuition and
+billing, registration, degree requirements, graduation, academic records, technology, the
+library and tutoring, disability services, health and wellness, parking, housing, advising,
+and military benefits. Every answer is grounded in one or more of 101 public UCCS
+documents: 96 web pages and 5 PDFs.
+
+How it was made: the questions were written by the author, a UCCS student who works as a
+student ambassador and orientation leader, from questions students actually ask, and the
+author researched every reference answer and evidence quote. The first 40 examples were
+written by hand. The next 208 were reviewed and edited with AI assistance: answers trimmed
+to what their quotes support, near-duplicates merged or grouped, and categories and groups
+assigned. Every evidence quote was then checked against the corpus snapshot with the
+evidence verifier; 26 of the 236 new quotes failed the first check and were corrected
+against the page text.
+
+To see the dataset version, the split, and any evidence conflicts:
+
+```bash
+uv run python -m trustbench.splits data/uccs.jsonl
+```
+
+| Category        | Dev | Test |
+|-----------------|-----|------|
+| `lookup`        | 105 | 57   |
+| `conditional`   | 28  | 18   |
+| `unanswerable`  | 9   | 6    |
+| `multi_passage` | 9   | 3    |
+| `paraphrase`    | 3   | 5    |
+| `false_premise` | 4   | 1    |
+| **Total**       | 158 | 90   |
+
+Difficulty: 158 easy, 75 medium, 15 hard. The first 40 examples were rated by hand; later
+examples are rated by category (lookup is easy; paraphrase, conditional, and unanswerable
+are medium; multi-passage and false-premise are hard).
+
+### Version and split
+
+- **Version:** a 16-character content hash. Examples are sorted by ID and serialized
+  canonically, so line order, key order, and whitespace in the file do not change the
+  version; any change to any example does. Results will be tagged with this version.
+- **Split:** each group (an example's `group`, or its own ID) is hashed with a fixed salt,
+  and about 40% of groups go to **test**. A group's split depends only on its own name, so
+  adding or removing other examples never moves an existing one. Dev is for building and
+  tuning systems; test is held out for final claims.
+- **Groups:** examples that quote the same sentence must share a group, so a near-copy of a
+  test question can never sit in dev. CI enforces this. Before groups were added, two
+  examples quoting the same census-date sentence were split across dev and test. When a
+  new example shares evidence with an existing one, the new example joins the existing
+  example's group, so the existing example keeps its split.
+
+### Unanswerable questions
+
+An unanswerable label means **no document in the corpus answers the question**, so it can
+become wrong when the corpus grows. When this batch added 87 documents, every unanswerable
+question was searched for again across the whole corpus. Two of the original 40 had become
+answerable (a parking permit refund rule and whom to contact about course prerequisites)
+and were relabeled with evidence; one was rewritten into an answerable question; and one
+was dropped because the corpus implied an answer without stating it. A keyword search only
+finds candidates: words like "defer" and "attendance" matched pages with unrelated
+meanings ("deferred payment plan", "cost of attendance"), so each match was judged by
+hand. This check has to be repeated whenever documents are added.
+
+### Known limitations
+
+These are stated so that results are not over-read:
+
+- **Small regressions are still hard to see.** The 90-example test split detects drops of
+  about 13.5 points at 20% disagreement (see "Power analysis" below). Smaller real
+  regressions will usually pass the gate.
+- **Lookup-heavy.** 162 of the 248 examples (65%) are direct lookups, which most systems
+  answer well.
+- **Few false premises.** There are only 5 false-premise examples, and only 1 is in the
+  test split, so no held-out claim can be made about them. Multi-passage examples are also
+  scarce (12, with 3 in test). The split favors stability over balance (stratifying would
+  move examples whenever new ones are added), so balance has to come from adding more of
+  these examples.
+- **Concentrated sources.** 18 examples cite the financial aid Satisfactory Academic
+  Progress page and 13 cite the advising FAQ for current students. A change to either page
+  affects many examples at once, and a system that handles those two pages well looks
+  better overall than it is.
+- **One author, AI-assisted review.** The labels have not been checked by a second person,
+  so there is no inter-annotator agreement measurement yet.
+- **Time-sensitive.** Many answers depend on the Spring 2027 calendar, the Fall 2026
+  tuition, fee, and payment pages, the 2026 registration handbooks, and prices that change.
+  The corpus manifest records exactly which snapshot the dataset was written against.
+- **Sources disagree.** Some UCCS pages state the same rule differently: the first-year
+  housing age requirement (the conflicting page is left out of the corpus), how long a
+  financial aid SAP appeal takes to process (one sentence says within two weeks, another
+  says to allow at least two to three; the example's answer gives both), and how long a
+  new student account takes to create (1 to 2 business days on one page, 2 on another).
+
+## Dataset format
+
+A dataset is a JSONL file: one JSON object per line, one example per object. Each example
+is one question with a reference answer and the evidence that proves it:
+
+```json
+{"id": "withdraw-001", "question": "Can I drop a class in week 3 and get a refund?", "reference_answer": "Yes. Classes dropped before the census date get a full refund.", "category": "lookup", "difficulty": "easy", "evidence": [{"doc_id": "registration-policy", "quote": "Courses dropped before the census date receive a full refund."}]}
+```
+
+| Category        | What it tests                                                      |
+|-----------------|--------------------------------------------------------------------|
+| `lookup`        | The answer is stated directly in one passage                       |
+| `paraphrase`    | The question uses different words than the document                |
+| `multi_passage` | The answer needs two or more passages (at least two evidence items) |
+| `conditional`   | The answer depends on a condition, a deadline, or a calculation    |
+| `false_premise` | The question assumes something the policy contradicts              |
+| `unanswerable`  | The documents do not contain the answer (no evidence allowed)      |
+
+Rules enforced when an example is loaded:
+
+- Unknown fields are rejected, so a typo like `refrence_answer` fails loudly.
+- Text fields cannot be blank. Surrounding whitespace is removed.
+- IDs are lowercase words separated by single hyphens, like `withdraw-001`, and must be
+  unique within a file.
+- `group` is optional and uses the same format as IDs. Examples with the same group always
+  land in the same split.
+- Every category except `unanswerable` needs at least one piece of evidence.
+- Evidence is a document ID plus an exact quote, not a chunk ID, so it stays valid no
+  matter how a RAG system splits documents into chunks.
+- Examples are immutable after loading.
+
+Rules for the file itself:
+
+- Blank lines are ignored, and both Unix and Windows line endings are accepted.
+- The file must be UTF-8 and contain at least one example.
+- Every problem in the file is reported together, with its line number, for example
+  `line 7: evidence.0.quote: String should have at least 1 character`.
+
+## Scoring
+
+`trustbench.scoring.score_answer(example, answer)` turns a system's answer into a verdict:
+passed, failed, or not applicable. The scorers so far are deterministic: plain code, so
+they are free, instant, reproducible, and every failure comes with a reason such as
+`missing phone:7192554444`.
+
+- **Abstention (unanswerable examples):** the answer passes if it says the documents do not
+  contain the answer ("the documents don't say...", "I couldn't find..."), and fails if it
+  answers anyway.
+- **Key facts (answerable examples):** every number, money amount, percentage, phone
+  number, and email address in the reference answer must appear in the answer. Facts are
+  normalized before comparing, so `$50.00` equals `$50`, `(719) 255-3391` equals
+  `719-255-3391`, and `004509` equals `4509`. **Extra facts are never penalized**, so an
+  answer that adds a crisis line or a second contact still passes.
+- **Not applicable:** an answerable example whose reference answer has no checkable facts
+  ("Contact your academic advisor") gets no verdict, rather than a guessed one.
+
+`python -m trustbench.scoring data/uccs.jsonl` shows how much of the dataset these scorers
+can judge:
+
+| Scorer        | Examples | Share |
+|---------------|----------|-------|
+| Abstention    | 15       | 6%    |
+| Key facts     | 54       | 22%   |
+| Needs a judge | 179      | 72%   |
+
+Code alone can judge 28% of the dataset; most answers are prose that only a judge reading
+for meaning can grade, which is why an LLM judge is planned next. A test also runs every
+reference answer through its own scorer: a reference that fails means the scorer or the
+data is wrong. It caught two unanswerable references that the first version of the
+abstention patterns missed.
+
+Known limitations:
+
+- An answer that invents an answer and also says the documents do not mention something
+  passes the abstention check, because abstention is detected by phrases.
+- Because extra facts are allowed, a made-up extra number is not caught.
+- Numbers written as words ("two to four weeks") are not extracted, so a correct answer
+  that spells out a number the reference writes in digits fails.
+- Facts are compared as sets, so the right numbers in the wrong places (swapped phone
+  numbers, for example) still pass.
 
 ## Statistics
 
@@ -173,137 +351,6 @@ points of pass rate, at 80% power and a two-sided 5% level:
 | Did the pass rate change, even on a small dataset?    | McNemar's exact test         |
 | Which slices changed, with many slices compared?      | McNemar per slice, then Holm |
 | Could this dataset have caught a regression at all?   | Power analysis               |
-
-## Dataset
-
-`data/uccs.jsonl` holds 248 questions about UCCS admissions, financial aid, tuition and
-billing, registration, degree requirements, graduation, academic records, technology, the
-library and tutoring, disability services, health and wellness, parking, housing, advising,
-and military benefits. Every answer is grounded in one or more of 101 public UCCS
-documents: 96 web pages and 5 PDFs.
-
-How it was made: the questions were written by the author, a UCCS student who works as a
-student ambassador and orientation leader, from questions students actually ask, and the
-author researched every reference answer and evidence quote. The first 40 examples were
-written by hand. The next 208 were reviewed and edited with AI assistance: answers trimmed
-to what their quotes support, near-duplicates merged or grouped, and categories and groups
-assigned. Every evidence quote was then checked against the corpus snapshot with the
-evidence verifier; 26 of the 236 new quotes failed the first check and were corrected
-against the page text.
-
-To see the dataset version, the split, and any evidence conflicts:
-
-```bash
-uv run python -m trustbench.splits data/uccs.jsonl
-```
-
-| Category        | Dev | Test |
-|-----------------|-----|------|
-| `lookup`        | 105 | 57   |
-| `conditional`   | 28  | 18   |
-| `unanswerable`  | 9   | 6    |
-| `multi_passage` | 9   | 3    |
-| `paraphrase`    | 3   | 5    |
-| `false_premise` | 4   | 1    |
-| **Total**       | 158 | 90   |
-
-Difficulty: 158 easy, 75 medium, 15 hard. The first 40 examples were rated by hand; later
-examples are rated by category (lookup is easy; paraphrase, conditional, and unanswerable
-are medium; multi-passage and false-premise are hard).
-
-### Version and split
-
-- **Version:** a 16-character content hash. Examples are sorted by ID and serialized
-  canonically, so line order, key order, and whitespace in the file do not change the
-  version; any change to any example does. Results will be tagged with this version.
-- **Split:** each group (an example's `group`, or its own ID) is hashed with a fixed salt,
-  and about 40% of groups go to **test**. A group's split depends only on its own name, so
-  adding or removing other examples never moves an existing one. Dev is for building and
-  tuning systems; test is held out for final claims.
-- **Groups:** examples that quote the same sentence must share a group, so a near-copy of a
-  test question can never sit in dev. CI enforces this. Before groups were added, two
-  examples quoting the same census-date sentence were split across dev and test. When a
-  new example shares evidence with an existing one, the new example joins the existing
-  example's group, so the existing example keeps its split.
-
-### Unanswerable questions
-
-An unanswerable label means **no document in the corpus answers the question**, so it can
-become wrong when the corpus grows. When this batch added 87 documents, every unanswerable
-question was searched for again across the whole corpus. Two of the original 40 had become
-answerable (a parking permit refund rule and whom to contact about course prerequisites)
-and were relabeled with evidence; one was rewritten into an answerable question; and one
-was dropped because the corpus implied an answer without stating it. A keyword search only
-finds candidates: words like "defer" and "attendance" matched pages with unrelated
-meanings ("deferred payment plan", "cost of attendance"), so each match was judged by
-hand. This check has to be repeated whenever documents are added.
-
-### Known limitations
-
-These are stated so that results are not over-read:
-
-- **Small regressions are still hard to see.** The 90-example test split detects drops of
-  about 13.5 points at 20% disagreement (see "Power analysis" above). Smaller real
-  regressions will usually pass the gate.
-- **Lookup-heavy.** 162 of the 248 examples (65%) are direct lookups, which most systems
-  answer well.
-- **Few false premises.** There are only 5 false-premise examples, and only 1 is in the
-  test split, so no held-out claim can be made about them. Multi-passage examples are also
-  scarce (12, with 3 in test). The split favors stability over balance (stratifying would
-  move examples whenever new ones are added), so balance has to come from adding more of
-  these examples.
-- **Concentrated sources.** 18 examples cite the financial aid Satisfactory Academic
-  Progress page and 13 cite the advising FAQ for current students. A change to either page
-  affects many examples at once, and a system that handles those two pages well looks
-  better overall than it is.
-- **One author, AI-assisted review.** The labels have not been checked by a second person,
-  so there is no inter-annotator agreement measurement yet.
-- **Time-sensitive.** Many answers depend on the Spring 2027 calendar, the Fall 2026
-  tuition, fee, and payment pages, the 2026 registration handbooks, and prices that change.
-  The corpus manifest records exactly which snapshot the dataset was written against.
-- **Sources disagree.** Some UCCS pages state the same rule differently: the first-year
-  housing age requirement (the conflicting page is left out of the corpus), how long a
-  financial aid SAP appeal takes to process (one sentence says within two weeks, another
-  says to allow at least two to three; the example's answer gives both), and how long a
-  new student account takes to create (1 to 2 business days on one page, 2 on another).
-
-## Dataset format
-
-A dataset is a JSONL file: one JSON object per line, one example per object. Each example
-is one question with a reference answer and the evidence that proves it:
-
-```json
-{"id": "withdraw-001", "question": "Can I drop a class in week 3 and get a refund?", "reference_answer": "Yes. Classes dropped before the census date get a full refund.", "category": "lookup", "difficulty": "easy", "evidence": [{"doc_id": "registration-policy", "quote": "Courses dropped before the census date receive a full refund."}]}
-```
-
-| Category        | What it tests                                                      |
-|-----------------|--------------------------------------------------------------------|
-| `lookup`        | The answer is stated directly in one passage                       |
-| `paraphrase`    | The question uses different words than the document                |
-| `multi_passage` | The answer needs two or more passages (at least two evidence items) |
-| `conditional`   | The answer depends on a condition, a deadline, or a calculation    |
-| `false_premise` | The question assumes something the policy contradicts              |
-| `unanswerable`  | The documents do not contain the answer (no evidence allowed)      |
-
-Rules enforced when an example is loaded:
-
-- Unknown fields are rejected, so a typo like `refrence_answer` fails loudly.
-- Text fields cannot be blank. Surrounding whitespace is removed.
-- IDs are lowercase words separated by single hyphens, like `withdraw-001`, and must be
-  unique within a file.
-- `group` is optional and uses the same format as IDs. Examples with the same group always
-  land in the same split.
-- Every category except `unanswerable` needs at least one piece of evidence.
-- Evidence is a document ID plus an exact quote, not a chunk ID, so it stays valid no
-  matter how a RAG system splits documents into chunks.
-- Examples are immutable after loading.
-
-Rules for the file itself:
-
-- Blank lines are ignored, and both Unix and Windows line endings are accepted.
-- The file must be UTF-8 and contain at least one example.
-- Every problem in the file is reported together, with its line number, for example
-  `line 7: evidence.0.quote: String should have at least 1 character`.
 
 ## Evidence corpus
 
