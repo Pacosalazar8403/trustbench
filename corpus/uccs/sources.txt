@@ -16,3 +16,102 @@ registration-drop-withdrawal-policy https://registrar.uccs.edu/withdrawal-polici
 spring-2027-bursar-calendar https://bursar.uccs.edu/calendar/spring-2027
 transfer-student-next-steps https://uccs.edu/admissions-aid/next-steps/transfer
 understanding-course-deadlines https://registrar.uccs.edu/course-deadlines/resources/understanding-course-deadlines
+# --- batch 2: admissions ---
+admissions-first-year https://www.uccs.edu/admissions-aid/application-details/first-year
+admissions-non-degree https://www.uccs.edu/admissions-aid/application-details/non-degree
+admissions-next-steps https://www.uccs.edu/admissions-aid/next-steps
+transfer-application-process https://transfer.uccs.edu/transfer-process/application-process
+transfer-admissions-criteria https://transfer.uccs.edu/admissions-criteria
+transfer-apply https://transfer.uccs.edu/apply
+# --- batch 2: financial aid ---
+finaid-how-to-apply https://finaid.uccs.edu/about-financial-aid/how-to-apply
+finaid-verification https://finaid.uccs.edu/policies/verif
+finaid-key-terms https://finaid.uccs.edu/policies/terms
+finaid-sap https://finaid.uccs.edu/policies/sap
+finaid-withdrawal https://finaid.uccs.edu/policies/withdrawal
+transfer-scholarships https://transfer.uccs.edu/fund-your-transfer/scholarships-grants
+admissions-scholarships https://www.uccs.edu/admissions-aid/scholarships
+# --- batch 2: tuition and payments ---
+bursar-home https://bursar.uccs.edu/
+bursar-estimate-bill https://bursar.uccs.edu/estimate-your-bill
+bursar-tuition-fees https://bursar.uccs.edu/tuition-and-fees
+bursar-tuition-fall-2026 https://bursar.uccs.edu/tuition-and-fees/fall-2026
+bursar-general-fees-fall-2026 https://bursar.uccs.edu/tuition-and-fees/fall-2026/general-fees
+bursar-billing https://bursar.uccs.edu/billing
+bursar-billing-faq https://bursar.uccs.edu/billing/frequently-asked-questions
+bursar-past-due https://bursar.uccs.edu/billing/past-due-billing-process
+bursar-credit-card-fee https://bursar.uccs.edu/Payments/Credit-Card-Service-Fee
+bursar-payment-procedures https://bursar.uccs.edu/payments/payment-procedures-and-deadlines
+bursar-payment-fall-2026 https://bursar.uccs.edu/payments/payment-procedures-and-deadlines/Fall-2026
+bursar-payment-faq https://bursar.uccs.edu/payments/Frequently-Asked-Questions
+bursar-529 https://bursar.uccs.edu/payments/529-savings-plan
+bursar-disbursements https://bursar.uccs.edu/refunds/disbursements-info
+bursar-debt-faq https://bursar.uccs.edu/student-debt-management/frequently-asked-questions
+# --- batch 2: registration and courses ---
+registrar-handbook-fall-2026 https://registrar.uccs.edu/sites/default/files/2026-03/Fall%202026%20Registration%20Handbook.pdf
+registrar-handbook-spring-2026 https://registrar.uccs.edu/sites/default/files/2026-01/Spring%202026%20Registration%20Handbook%20%28updated%201.21.26%29.pdf
+registrar-handbook-summer-2026 https://registrar.uccs.edu/sites/default/files/2026-03/Summer%202026%20Registration%20Handbook.pdf
+advising-credit-overload-form https://advising.uccs.edu/sites/g/files/kjihxj1341/files/inline-files/Credit_Overload_Form_01_19_0.pdf
+advising-current-student-faq https://advising.uccs.edu/frequently-asked-questions/current-student
+registrar-grade-forgiveness https://registrar.uccs.edu/student-resources/general-information/grade-forgiveness
+registrar-grading https://registrar.uccs.edu/facultystaff/support-and-grading/grading
+registrar-instruction-modes https://registrar.uccs.edu/student-resources/enrollment-and-registration/instruction-modes-course-delivery-options
+orientation-journey https://orientation.uccs.edu/new-student-journey-steps
+# --- batch 2: majors and degree requirements ---
+inst-individually-structured-ba https://inst.uccs.edu/academics/individually-structured-ba
+advising-syllabus https://advising.uccs.edu/sites/g/files/kjihxj1341/files/inline-files/FINAL-CompetingToConserveArticle.pdf
+# --- batch 2: graduation ---
+registrar-applying-to-graduate https://registrar.uccs.edu/student-resources/graduation-and-commencement/applying-to-graduate
+registrar-commencement https://registrar.uccs.edu/student-resources/graduation/commencement
+registrar-diplomas https://registrar.uccs.edu/student-resources/graduation-and-commencement/diplomas
+commencement-home https://commencement.uccs.edu/
+commencement-faqs https://commencement.uccs.edu/faqs
+commencement-checklist https://commencement.uccs.edu/pre-grad-checklist
+# --- batch 2: academic records ---
+registrar-transcripts https://registrar.uccs.edu/transcripts
+registrar-enrollment-verification https://registrar.uccs.edu/student-resources/records-and-privacy/enrollment-verification
+registrar-ferpa https://registrar.uccs.edu/student-resources/records-and-privacy/ferpa-the-family-educational-rights-and-privacy-act
+registrar-ferpa-consent https://registrar.uccs.edu/student-resources/records-and-privacy/ferpa-consent-to-release
+registrar-name-changes https://registrar.uccs.edu/student-resources/records-and-privacy/name-changes-and-updating-personal-information
+# --- batch 2: technology ---
+oit-home https://oit.uccs.edu/
+oit-get-it-done https://oit.uccs.edu/getITdone
+oit-myaccount https://myaccount.uccs.edu/
+oit-uccs-wireless https://oit.uccs.edu/services/housing/uccswireless
+oit-network https://oit.uccs.edu/services/network-and-internet
+oit-vpn https://oit.uccs.edu/services/network-and-internet/vpn
+oit-labs https://oit.uccs.edu/labs
+oit-lab-software https://oit.uccs.edu/services/smart-classrooms-open-labs/complabsoftware
+# --- batch 2: library and academic support ---
+kfl-room-reservations https://kfl.uccs.edu/info/policies/room-reservations
+kfl-help https://kfl.uccs.edu/help
+kfl-student-services https://kfl.uccs.edu/library-services-students
+excel-centers https://excel.uccs.edu/
+math-center https://mathcenter.uccs.edu/
+math-center-drop-in https://mathcenter.uccs.edu/drop-in-tutoring
+math-center-online https://mathcenter.uccs.edu/online-tutoring
+trio-tutoring https://trio.uccs.edu/tutoring
+# --- batch 2: disability services ---
+ds-home https://disability.uccs.edu/
+ds-new-returning https://disability.uccs.edu/students/new-and-returning-students
+ds-documentation https://disability.uccs.edu/students/documentation-guidelines
+ds-testing https://disability.uccs.edu/students/testing
+ds-housing https://disability.uccs.edu/housing-and-residential-accommodations
+ds-grievance https://disability.uccs.edu/students/grievance-procedure
+# --- batch 2: health and wellness ---
+wellness-health-services https://recwellness.uccs.edu/health-services
+wellness-insurance https://recwellness.uccs.edu/health-services/clydes-care-plan-insurance
+wellness-immunizations https://recwellness.uccs.edu/health-services/immunizations
+wellness-mmr https://recwellness.uccs.edu/health-services/immunizations/mmr
+wellness-psychotherapy https://recwellness.uccs.edu/mental-health-services/training/psychotherapy
+wellness-groups https://recwellness.uccs.edu/mental-health-services/services/group-sessions
+wellness-24-7 https://recwellness.uccs.edu/mental-health-services/24-7-mental-health-resources
+wellness-nutrition https://recwellness.uccs.edu/nutrition-services
+# --- batch 2: parking and transportation ---
+pts-general-parking https://pts.uccs.edu/general-parking-information-qr-landing
+pts-general-info https://pts.uccs.edu/general-information
+pts-commuter https://pts.uccs.edu/current-commuter-students
+pts-visitor https://pts.uccs.edu/visitor-parking
+pts-shuttle https://pts.uccs.edu/campus-shuttle
+pts-city-bus https://pts.uccs.edu/city-bus
+pts-citations https://pts.uccs.edu/citations
