@@ -14,9 +14,10 @@ significantly.
 Pre-alpha. This repository currently contains the project skeleton, its quality tooling,
 the dataset schema and loader, the evidence corpus tooling (HTML pages and PDF documents),
 an evidence verifier, a dataset of 248 verified examples on 101 public UCCS documents with
-its version and dev/test split, deterministic answer scorers, and the first statistical
-methods: a paired bootstrap with a measured coverage study, McNemar's exact test, Holm
-correction, and an exact power analysis. Everything under "Planned" is not built yet.
+its version and dev/test split, deterministic answer scorers, a BM25 retrieval baseline
+with measured recall, and the first statistical methods: a paired bootstrap with a
+measured coverage study, McNemar's exact test, Holm correction, and an exact power
+analysis. Everything under "Planned" is not built yet.
 
 ## Current
 
@@ -37,6 +38,8 @@ correction, and an exact power analysis. Everything under "Planned" is not built
 - Deterministic scorers: abstention for unanswerable questions, and key facts (numbers,
   money, percentages, phone numbers, emails) for answerable ones, with a check that every
   reference answer passes its own scorer (see "Scoring" below)
+- BM25 retrieval baseline over the corpus, with recall@k measured at the document level
+  and at the quote level (see "Retrieval" below)
 - Paired bootstrap confidence intervals for the difference between two systems, and a
   coverage study that measures how often those intervals are actually right (see
   "Statistics" below)
@@ -62,6 +65,8 @@ correction, and an exact power analysis. Everything under "Planned" is not built
   questions (the power analysis below shows what each size can detect)
 - Noise baseline (same config, repeated runs), which also measures the real disagreement
   rate the power analysis currently assumes
+- Better retrieval, measured against the BM25 baseline: embedding and hybrid search, and
+  chunking by sentence or section
 - Output caching keyed by config, model, prompt, and dataset version
 - CLI: `trustbench run` and `trustbench compare`
 - GitHub Action that comments on a PR and fails only on significant regressions
@@ -241,6 +246,56 @@ Known limitations:
   that spells out a number the reference writes in digits fails.
 - Facts are compared as sets, so the right numbers in the wrong places (swapped phone
   numbers, for example) still pass.
+
+## Retrieval
+
+A RAG system can only answer from what it retrieves, so retrieval is measured on its own,
+before any language model is involved. `trustbench.retrieval` splits every corpus document
+into windows of 100 words that overlap by 25 (1,290 chunks from the 101 documents) and
+ranks them with BM25, implemented in the module: a chunk scores higher when it contains the
+question's rare words, contains them more often (with diminishing returns, `k1 = 1.5`),
+and is shorter (`b = 0.75`). Ties are broken by document ID and chunk position, so
+rankings are reproducible.
+
+The dataset is the answer key: every answerable example names the documents and quotes
+that contain its answer, so recall needs no model and no labels. It is measured at two
+levels:
+
+- **Document recall@k:** a chunk from a cited document is in the top k.
+- **Quote recall@k:** a chunk that contains an evidence quote in full, from any document,
+  is in the top k. This is what a language model would actually need to read.
+
+`python -m trustbench.retrieval data/uccs.jsonl corpus/uccs`:
+
+| Split | Level    | Examples | @1    | @3    | @5    | @10   |
+|-------|----------|----------|-------|-------|-------|-------|
+| dev   | document | 149      | 47.7% | 64.4% | 73.8% | 81.9% |
+| dev   | quote    | 149      | 30.2% | 48.3% | 57.0% | 66.4% |
+| test  | document | 84       | 39.3% | 58.3% | 65.5% | 76.2% |
+| test  | quote    | 84       | 21.4% | 34.5% | 45.2% | 58.3% |
+
+What the numbers say:
+
+- **Document recall overstates what a model gets.** For 24 dev questions, BM25 finds a
+  chunk from the right document but not the chunk that holds the answer. Even with the
+  top 10 chunks, a model sees the answer text for about two thirds of dev questions and
+  58% of test questions, which caps how well any generator built on this retriever can do.
+- **Near-duplicate pages are not the cause.** Several UCCS pages repeat each other's text,
+  but only 1 dev question had its quote retrieved from a page other than the cited one.
+- **Test looks worse than dev, but the gap is within noise.** With 84 test examples, the
+  difference in quote recall@10 (about 8 points) is roughly 1.2 standard errors.
+- **Length normalization barely matters here.** On dev, every `b` from 0 to 1 changed
+  recall@k by at most one question, because fixed-size chunks are all about the same
+  length. The standard `b = 0.75` was kept rather than tuned to noise, and any tuning is
+  done on dev only, so test stays a fair held-out check.
+
+Known limitations:
+
+- Keyword matching misses paraphrases: a question about an "override" does not match a
+  page about "permission numbers". Embedding or hybrid retrieval is the usual fix.
+- Fixed word windows ignore sentence and section boundaries, and a long quote that crosses
+  a window boundary counts as a quote miss even when both halves are retrieved.
+- There is no stemming, so "refund" and "refunds" are different words.
 
 ## Statistics
 
