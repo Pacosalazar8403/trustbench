@@ -13,10 +13,10 @@ significantly.
 
 Pre-alpha. This repository currently contains the project skeleton, its quality tooling,
 the dataset schema and loader, the evidence corpus tooling (HTML pages and PDF documents),
-an evidence verifier, a first dataset of 40 verified examples with its version and dev/test
-split, and the first statistical methods: a paired bootstrap with a measured coverage
-study, McNemar's exact test, Holm correction, and an exact power analysis. Everything under
-"Planned" is not built yet.
+an evidence verifier, a dataset of 248 verified examples on 101 public UCCS documents with
+its version and dev/test split, and the first statistical methods: a paired bootstrap with
+a measured coverage study, McNemar's exact test, Holm correction, and an exact power
+analysis. Everything under "Planned" is not built yet.
 
 ## Current
 
@@ -32,8 +32,8 @@ study, McNemar's exact test, Holm correction, and an exact power analysis. Every
   records a SHA-256 manifest (see "Evidence corpus" below)
 - Evidence verifier that checks every quote in a dataset against its corpus document and
   shows where a failing quote stops matching
-- A first dataset of 40 hand-written examples on 14 public UCCS pages, with every evidence
-  quote verified (see "Dataset" below)
+- A dataset of 248 examples on 101 public UCCS documents (96 web pages and 5 PDFs), with
+  every evidence quote verified (see "Dataset" below)
 - Paired bootstrap confidence intervals for the difference between two systems, and a
   coverage study that measures how often those intervals are actually right (see
   "Statistics" below)
@@ -53,8 +53,8 @@ study, McNemar's exact test, Holm correction, and an exact power analysis. Every
 
 ## Planned
 
-- Grow the dataset to 250+ examples, with more multi-passage, conditional, and
-  false-premise questions (the power analysis below shows why 40 is not enough)
+- Grow the dataset toward 500+ examples, with many more false-premise and multi-passage
+  questions (the power analysis below shows what each size can detect)
 - Noise baseline (same config, repeated runs), which also measures the real disagreement
   rate the power analysis currently assumes
 - Deterministic scorers plus an LLM judge calibrated against human labels (Cohen's kappa)
@@ -95,11 +95,12 @@ real systems do, and counts how often the interval contains 0.03:
 | 250      | 94.5%                              |
 
 At 100 examples and up, the intervals are about as reliable as they claim. At 13 examples,
-the size of the current test split, a "95% interval" contains the truth only about half
+the size of the original test split, a "95% interval" contains the truth only about half
 the time: with so few examples, many experiments have no example where the systems
-disagree at all, so the bootstrap sees no variation and reports a zero-width interval.
-**Until the test split is much larger, a bootstrap interval on it must not be read as a
-95% interval.** The tests pin both results, so this warning stays backed by code.
+disagree at all, so the bootstrap sees no variation and reports a zero-width interval. The
+test split now has 90 examples, close to the 100-example row, but coverage has not been
+measured at exactly that size, so intervals on it should be read with that in mind. The
+tests pin both results above, so these warnings stay backed by code.
 
 ### McNemar's exact test
 
@@ -154,8 +155,10 @@ points of pass rate, at 80% power and a two-sided 5% level:
 | 500      | 5.8              | 4.1              |
 | 1000     | 4.1              | 2.9              |
 
-- **The current test split cannot detect any regression.** With 13 examples, even a
-  candidate that loses every disagreement is caught less than 80% of the time.
+- **What the current test split can detect.** The original 13-example test split could not
+  reliably detect any regression. The current 90-example test split detects a drop of
+  about 13.5 points at 20% disagreement, or 9.3 points at 10%
+  (`minimum_detectable_drop(90, 0.2)` and `minimum_detectable_drop(90, 0.1)`).
 - **Fewer disagreements hurt small datasets and help large ones.** Rare disagreements often
   fall short of the 6 that McNemar's test needs, but when there are enough examples, a
   real drop between similar systems shows up as a very lopsided split.
@@ -173,10 +176,20 @@ points of pass rate, at 80% power and a two-sided 5% level:
 
 ## Dataset
 
-`data/uccs.jsonl` holds 40 questions about UCCS registration, deadlines, billing, housing,
-advising, and military benefits. Every question, reference answer, and evidence quote was
-written by hand by the author, a UCCS student, and every quote was verified against the
-corpus snapshot with the evidence verifier.
+`data/uccs.jsonl` holds 248 questions about UCCS admissions, financial aid, tuition and
+billing, registration, degree requirements, graduation, academic records, technology, the
+library and tutoring, disability services, health and wellness, parking, housing, advising,
+and military benefits. Every answer is grounded in one or more of 101 public UCCS
+documents: 96 web pages and 5 PDFs.
+
+How it was made: the questions were written by the author, a UCCS student who works as a
+student ambassador and orientation leader, from questions students actually ask, and the
+author researched every reference answer and evidence quote. The first 40 examples were
+written by hand. The next 208 were reviewed and edited with AI assistance: answers trimmed
+to what their quotes support, near-duplicates merged or grouped, and categories and groups
+assigned. Every evidence quote was then checked against the corpus snapshot with the
+evidence verifier; 26 of the 236 new quotes failed the first check and were corrected
+against the page text.
 
 To see the dataset version, the split, and any evidence conflicts:
 
@@ -186,15 +199,17 @@ uv run python -m trustbench.splits data/uccs.jsonl
 
 | Category        | Dev | Test |
 |-----------------|-----|------|
-| `lookup`        | 18  | 8    |
-| `unanswerable`  | 3   | 3    |
-| `paraphrase`    | 1   | 2    |
-| `conditional`   | 2   | 0    |
-| `false_premise` | 2   | 0    |
-| `multi_passage` | 1   | 0    |
-| **Total**       | 27  | 13   |
+| `lookup`        | 105 | 57   |
+| `conditional`   | 28  | 18   |
+| `unanswerable`  | 9   | 6    |
+| `multi_passage` | 9   | 3    |
+| `paraphrase`    | 3   | 5    |
+| `false_premise` | 4   | 1    |
+| **Total**       | 158 | 90   |
 
-Difficulty: 22 easy, 16 medium, 2 hard.
+Difficulty: 158 easy, 75 medium, 15 hard. The first 40 examples were rated by hand; later
+examples are rated by category (lookup is easy; paraphrase, conditional, and unanswerable
+are medium; multi-passage and false-premise are hard).
 
 ### Version and split
 
@@ -207,29 +222,50 @@ Difficulty: 22 easy, 16 medium, 2 hard.
   tuning systems; test is held out for final claims.
 - **Groups:** examples that quote the same sentence must share a group, so a near-copy of a
   test question can never sit in dev. CI enforces this. Before groups were added, two
-  examples quoting the same census-date sentence were split across dev and test.
+  examples quoting the same census-date sentence were split across dev and test. When a
+  new example shares evidence with an existing one, the new example joins the existing
+  example's group, so the existing example keeps its split.
+
+### Unanswerable questions
+
+An unanswerable label means **no document in the corpus answers the question**, so it can
+become wrong when the corpus grows. When this batch added 87 documents, every unanswerable
+question was searched for again across the whole corpus. Two of the original 40 had become
+answerable (a parking permit refund rule and whom to contact about course prerequisites)
+and were relabeled with evidence; one was rewritten into an answerable question; and one
+was dropped because the corpus implied an answer without stating it. A keyword search only
+finds candidates: words like "defer" and "attendance" matched pages with unrelated
+meanings ("deferred payment plan", "cost of attendance"), so each match was judged by
+hand. This check has to be repeated whenever documents are added.
 
 ### Known limitations
 
 These are stated so that results are not over-read:
 
-- **Too small to detect regressions.** With 40 examples (13 in test), the power analysis
-  shows that no regression on the test split can be reliably detected, and bootstrap
-  intervals on it are far less reliable than their stated level (see "Statistics" above).
-- **Unbalanced test split.** The test split has no conditional, false-premise, or
-  multi-passage examples yet, so no held-out claim can be made about those categories. The
-  split favors stability over balance (stratifying would move examples whenever new ones
-  are added), so balance has to come from adding more of those examples.
-- **Lookup-heavy.** About two thirds of the examples are direct lookups, which most systems
-  answer well. The harder categories are underrepresented.
-- **One author.** The labels have not been checked by a second person, so there is no
-  inter-annotator agreement measurement yet.
-- **Time-sensitive.** Some answers depend on the Spring 2027 calendar and on pages that
-  can change. The corpus manifest records exactly which snapshot the dataset was written
-  against.
-- **Sources disagree.** At least one other UCCS page states the first-year housing age
-  requirement differently from the page this dataset cites; that page is left out of the
-  corpus until the conflict is handled.
+- **Small regressions are still hard to see.** The 90-example test split detects drops of
+  about 13.5 points at 20% disagreement (see "Power analysis" above). Smaller real
+  regressions will usually pass the gate.
+- **Lookup-heavy.** 162 of the 248 examples (65%) are direct lookups, which most systems
+  answer well.
+- **Few false premises.** There are only 5 false-premise examples, and only 1 is in the
+  test split, so no held-out claim can be made about them. Multi-passage examples are also
+  scarce (12, with 3 in test). The split favors stability over balance (stratifying would
+  move examples whenever new ones are added), so balance has to come from adding more of
+  these examples.
+- **Concentrated sources.** 18 examples cite the financial aid Satisfactory Academic
+  Progress page and 13 cite the advising FAQ for current students. A change to either page
+  affects many examples at once, and a system that handles those two pages well looks
+  better overall than it is.
+- **One author, AI-assisted review.** The labels have not been checked by a second person,
+  so there is no inter-annotator agreement measurement yet.
+- **Time-sensitive.** Many answers depend on the Spring 2027 calendar, the Fall 2026
+  tuition, fee, and payment pages, the 2026 registration handbooks, and prices that change.
+  The corpus manifest records exactly which snapshot the dataset was written against.
+- **Sources disagree.** Some UCCS pages state the same rule differently: the first-year
+  housing age requirement (the conflicting page is left out of the corpus), how long a
+  financial aid SAP appeal takes to process (one sentence says within two weeks, another
+  says to allow at least two to three; the example's answer gives both), and how long a
+  new student account takes to create (1 to 2 business days on one page, 2 on another).
 
 ## Dataset format
 
@@ -276,30 +312,37 @@ Dataset evidence quotes public UCCS web pages and PDF documents. The document te
 quoting them, so the text stays on the machine that downloaded it. What is committed in
 `corpus/uccs/`:
 
-- `sources.txt`: one `doc_id url` per line
+- `sources.txt`: one `doc_id url` per line, grouped by topic with `#` comment lines
 - `manifest.jsonl`: for each document, its URL, when it was downloaded (UTC), and a SHA-256
   hash and length of its extracted text
 
-To rebuild the corpus locally:
+To build the corpus locally:
 
 ```bash
 cd corpus/uccs
 mkdir -p raw
 grep -v '^#' sources.txt | while read -r doc url; do
-  [ -n "$doc" ] && curl -fsSL --max-time 30 -o "raw/$doc.html" "$url"
+  if [ -n "$doc" ] && [ ! -f "raw/$doc.html" ]; then
+    curl -fsSL --max-time 30 -o "raw/$doc.html" "$url" || echo "FAILED: $doc $url"
+  fi
 done
 cd ../..
 uv run python -m trustbench.corpus build corpus/uccs
 git diff corpus/uccs/manifest.jsonl
 ```
 
+The loop only downloads documents that are not saved yet. Downloading a saved document
+again would replace the snapshot its examples were verified against: if the page had
+changed since, its hash would change and its quotes could break, mixed in with whatever
+new work is being added. To deliberately refresh a document, delete its file in `raw/`,
+download it again, rebuild, and rerun the evidence verifier.
+
 The loop saves every document as `raw/<doc_id>.html`, including PDFs. That is intended:
 the build decides how to read each file from its content (a PDF starts with the bytes
 `%PDF-`), not from its name.
 
-The rebuilt manifest will always have new download times. A document whose **hash**
-changed now shows different text than the snapshot the dataset was written against, so its
-evidence quotes need to be checked again.
+A rebuilt document whose **hash** changed now shows different text than the snapshot the
+dataset was written against, so its evidence quotes need to be checked again.
 
 The hash covers the extracted text, not the raw file, because HTML changes constantly
 (cache tokens, scripts) even when the words a reader sees do not.
@@ -327,7 +370,9 @@ How text is normalized for quote matching: Unicode NFKC (which turns non-breakin
 into spaces and typographic ligatures into separate letters), curly quotes and long dashes
 replaced with plain ASCII, and every run of whitespace collapsed into one space. Letter
 case and all other punctuation are kept, so a quote that differs from its source in
-meaning-bearing ways still fails.
+meaning-bearing ways still fails. In particular, single and double quote marks are not
+treated as the same: a quote copied with `'` where the page has `"` fails, which caught
+several transcription errors in this dataset.
 
 Known limitations:
 
