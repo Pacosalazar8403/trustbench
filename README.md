@@ -16,8 +16,9 @@ the dataset schema and loader, the evidence corpus tooling (HTML pages and PDF d
 an evidence verifier, a dataset of 248 verified examples on 101 public UCCS documents with
 its version and dev/test split, deterministic answer scorers, a BM25 retrieval baseline
 with measured recall, a model runner with an answer cache, a regression gate that
-compares two models' answers, and the statistical methods behind it: a paired bootstrap
-with a measured coverage study, McNemar's exact test, Holm correction, and an exact power
+compares two models' answers, an LLM judge with blind human labels and a calibration that
+is not yet conclusive, and the statistical methods behind them: a paired bootstrap with a
+measured coverage study, McNemar's exact test, Holm correction, and an exact power
 analysis. Everything under "Planned" is not built yet.
 
 ## Current
@@ -48,6 +49,9 @@ analysis. Everything under "Planned" is not built yet.
   paired bootstrap, breaks the change down by category with Holm correction, reports
   what the comparison could have detected, and exits 1 only on a significant regression
   (see "Comparing two systems" below)
+- LLM judge for answers the scorers cannot grade, a blind labeling tool, 60 human labels,
+  and a calibration that compares person, judge, and scorers with Cohen's kappa and its
+  bootstrap interval (see "LLM judge" below)
 - Paired bootstrap confidence intervals for the difference between two systems, and a
   coverage study that measures how often those intervals are actually right (see
   "Statistics" below)
@@ -67,8 +71,8 @@ analysis. Everything under "Planned" is not built yet.
 
 ## Planned
 
-- An LLM judge for the 72% of examples the deterministic scorers cannot judge, calibrated
-  against human labels (Cohen's kappa)
+- A stricter judge prompt (omissions, abstentions, a verdict that follows its reason),
+  confirmed on a new set of held-out labels, before the judge gets a vote in the gate
 - Grow the dataset toward 500+ examples, with many more false-premise and multi-passage
   questions (the power analysis below shows what each size can detect)
 - Noise baseline (same config, repeated runs), which also measures the real disagreement
@@ -456,7 +460,7 @@ overall result possible, and it is also why slices cannot gate.
 Known limitations:
 
 - **Only the deterministically judged examples count**, so the gate is blind to changes
-  in the prose answers until an LLM judge is added.
+  in the prose answers until the LLM judge is calibrated (see "LLM judge").
 - **Both runs must use the same split and `k`.** A comparison across different retrieval
   settings needs both settings run first.
 - **The bootstrap resamples positions.** The seed is fixed and examples are sorted by ID,
@@ -464,6 +468,104 @@ Known limitations:
   counts in a different order give slightly different intervals.
 - **One run per model.** Whether a model's own answers change between runs is not
   measured yet; that is the noise baseline.
+
+## LLM judge
+
+The deterministic scorers grade only 43 of the 158 dev questions; the rest are prose that
+only a reader can grade. `trustbench.judge` is that reader: a local `qwen2.5:7b` served by
+Ollama, from a different model family than the llama systems it grades (models tend to
+prefer their own outputs). It sees the question, the reference answer, the evidence
+quotes, and the answer, and replies in JSON with a one-sentence reason first and then a
+verdict, `correct` or `incorrect`. A reply without a clear verdict gets no verdict and is
+listed, never counted as a pass or a fail.
+
+```bash
+uv run python -m trustbench.judge data/uccs.jsonl corpus/uccs --model llama3.2:3b
+```
+
+A judge is a model and can be wrong, so it gets no vote in the gate until it is measured.
+
+### First check: the judge against the scorers
+
+On the 43 answers both can grade, the judge agreed with the scorers on 37 (86%, kappa
+0.72). Reading the 6 disagreements against the corpus split them 3 to 3, and showed how
+each rater fails:
+
+- **The scorers were wrong on 3.** They matched "24/7" in an answer that gave a different
+  crisis line (health-014), cannot catch a wrong extra fact (military-001), and recognize
+  abstention only by its wording, so a correct referral failed (tuition-020).
+- **The judge was wrong on 3.** It passed an answer that its own reason called incomplete
+  (grad-015), credited words from the reference to the answer (library-012), and failed a
+  true claim because the reference did not mention it (parking-015).
+
+Neither is ground truth, which is why the judge is calibrated against a person.
+
+### Blind human labels
+
+`python -m trustbench.label data/uccs.jsonl corpus/uccs` shows a fixed random sample of
+answers one at a time and records `correct`, `incorrect`, or `skip`. The labeler never
+sees which model wrote an answer or what the judge or the scorers said. The sample is 45
+answers the scorers cannot grade and 15 they can, from both models. Labels are saved as
+they are given, with the answer text, in `data/labels/uccs-dev.jsonl`, and CI checks the
+file.
+
+The labeling rubric is the standard the judge is meant to meet, and it differs from the
+judge's prompt in two places on purpose: an extra claim is wrong only if it is actually
+wrong (the person can check the page), and an unanswerable question is answered
+correctly by any reply that does not invent an answer, including a referral.
+
+Before comparing with the judge, one label was corrected against the corpus (an adjudication
+pass, done before seeing the judge's verdicts so they could not bias it). Four labels were
+not blind, because those answers had been inspected with the judge's verdict earlier; the
+calibration reports kappa with and without them.
+
+### Calibration
+
+`python -m trustbench.calibrate data/uccs.jsonl` judges every labeled answer and compares
+person, judge, and scorers, each kappa with a 95% bootstrap interval:
+
+| Comparison                               | Answers | Agree | Kappa | 95% CI        |
+|------------------------------------------|---------|-------|-------|---------------|
+| person vs judge, scorers cannot grade    | 45      | 80%   | 0.61  | [0.37, 0.82]  |
+| person vs judge, all                     | 60      | 78%   | 0.57  | [0.36, 0.77]  |
+| person vs judge, scorers can grade       | 15      | 73%   | 0.44  | [-0.10, 0.86] |
+| person vs scorers                        | 15      | 73%   | 0.44  | [-0.11, 0.86] |
+| person vs judge, without the 4 not blind | 56      | 79%   | 0.58  | [0.36, 0.78]  |
+
+The judge is trusted only if the whole interval on prose answers is at or above 0.6, the
+start of "substantial" agreement; it is not trusted if the whole interval is below, and
+the result is inconclusive otherwise. The first version of this rule used the point
+estimate and called 0.61 "TRUSTED"; it was changed, because 60 labels cannot tell 0.61
+from 0.37. The verdict is:
+
+```text
+verdict: INCONCLUSIVE (kappa 0.61, 95% CI [0.37, 0.82] ... contains 0.6; label more answers)
+```
+
+What the comparison does show:
+
+- **The judge is more lenient than the person.** It passed 50% of the labeled answers and
+  the person 38%. Of 13 disagreements, 10 are answers the person failed and the judge
+  passed. Its reasons show partial answers forgiven ("does not explicitly mention signing
+  a waiver"), unsupported additions forgiven ("additional methods not supported by the
+  evidence"), a "documents don't say" reply passed when the reference answers, and once a
+  reason and verdict that point in opposite directions.
+- **The scorers are no better.** On the 15 answers they grade, they agree with the person
+  exactly as well as the judge does (kappa 0.44).
+- **The labels that were not blind did not matter** (0.58 without them, 0.57 with).
+
+Next: a stricter judge prompt aimed at these failures, confirmed on a new set of labels
+drawn with a different seed. Tuning the prompt on these 60 labels and measuring it on
+the same 60 would only fit it to one person's grading.
+
+Known limitations:
+
+- **One labeler, 60 labels.** There is no second person to measure how much people
+  disagree with each other, which bounds how well any judge can do.
+- **The judge sees only the reference's evidence quotes**, so it cannot check a true
+  claim from elsewhere on the page.
+- **Each judgment takes about 1.3 seconds** on a laptop GPU, roughly 3.5 minutes for the
+  dev split.
 
 ## Statistics
 
@@ -654,6 +756,10 @@ Known limitations:
 - A word hyphenated across a PDF line break (`regis-` then `tration`) does not match a
   quote that spells it whole.
 - PDF tables are read as plain lines, not converted to `cell | cell` lines like HTML tables.
+- Links placed side by side are joined with no separator, so separate items can read as
+  one sentence. A model merged two VA benefit forms this way ("Chapters 30, 33, 1606 &
+  1607 Chapter 35"). Fixing it changes extracted text and hashes, so it needs its own
+  change and a rerun of the evidence verifier.
 
 ### Verifying evidence
 
