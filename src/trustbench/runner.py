@@ -84,25 +84,33 @@ class Model(Protocol):
 
 @dataclass(frozen=True)
 class OllamaModel:
-    """A model served by Ollama, called with greedy decoding and a fixed seed."""
+    """A model served by Ollama, called with greedy decoding and a fixed seed.
+
+    With `json_output`, Ollama constrains the reply to valid JSON, which the judge needs.
+    The setting is part of the name, so it is part of every cache key.
+    """
 
     model: str
     base_url: str = OLLAMA_URL
     timeout: float = 300.0
     temperature: float = 0.0
     seed: int = 0
+    json_output: bool = False
 
     @property
     def name(self) -> str:
-        return f"ollama:{self.model} temperature={self.temperature} seed={self.seed}"
+        name = f"ollama:{self.model} temperature={self.temperature} seed={self.seed}"
+        return name + " format=json" if self.json_output else name
 
     def generate(self, prompt: str) -> Generation:
-        body = {
+        body: dict[str, object] = {
             "model": self.model,
             "prompt": prompt,
             "stream": False,
             "options": {"temperature": self.temperature, "seed": self.seed},
         }
+        if self.json_output:
+            body["format"] = "json"
         request = urllib.request.Request(
             f"{self.base_url}/api/generate",
             data=json.dumps(body).encode("utf-8"),
@@ -220,6 +228,31 @@ def cache_key(model_name: str, prompt: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def generate_cached(
+    model: Model, prompt: str, cache: AnswerCache, example_id: str, version: str
+) -> tuple[Answer, bool]:
+    """Return the cached reply to this prompt from this model, or generate and cache it.
+
+    The second value is True when the reply came from the cache.
+    """
+    key = cache_key(model.name, prompt)
+    answer = cache.get(key)
+    if answer is not None:
+        return answer, True
+    generation = model.generate(prompt)
+    answer = Answer(
+        key=key,
+        example_id=example_id,
+        model=model.name,
+        dataset_version=version,
+        answer=generation.text,
+        tokens=generation.tokens,
+        seconds=generation.seconds,
+    )
+    cache.put(answer)
+    return answer, False
+
+
 def run(
     examples: Iterable[Example],
     index: BM25,
@@ -233,21 +266,7 @@ def run(
     results = []
     for position, example in enumerate(examples, start=1):
         prompt = prompt_for(example, index, k)
-        key = cache_key(model.name, prompt)
-        answer = cache.get(key)
-        cached = answer is not None
-        if answer is None:
-            generation = model.generate(prompt)
-            answer = Answer(
-                key=key,
-                example_id=example.id,
-                model=model.name,
-                dataset_version=version,
-                answer=generation.text,
-                tokens=generation.tokens,
-                seconds=generation.seconds,
-            )
-            cache.put(answer)
+        answer, cached = generate_cached(model, prompt, cache, example.id, version)
         result = Result(example, answer, cached)
         results.append(result)
         if on_result is not None:

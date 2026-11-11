@@ -231,6 +231,17 @@ def test_ollama_model_name_includes_its_settings() -> None:
     assert OllamaModel("llama3.2:1b").name == "ollama:llama3.2:1b temperature=0.0 seed=0"
 
 
+def test_json_mode_is_requested_and_named_without_renaming_plain_models(
+    ollama_url: str,
+) -> None:
+    judge = OllamaModel("qwen2.5:7b", ollama_url, json_output=True)
+    judge.generate("a prompt")
+
+    assert FakeOllama.requests[0]["format"] == "json"
+    assert judge.name == "ollama:qwen2.5:7b temperature=0.0 seed=0 format=json"
+    assert "format" not in OllamaModel("llama3.2:1b").name
+
+
 def test_ollama_errors_are_reported_clearly(ollama_url: str) -> None:
     with pytest.raises(RunnerError, match=r"HTTP 404.*not found"):
         OllamaModel("missing", ollama_url).generate("a prompt")
