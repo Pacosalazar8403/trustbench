@@ -194,6 +194,26 @@ def build_prompt(question: str, chunks: Sequence[Chunk]) -> str:
     )
 
 
+def prompt_for(example: Example, index: BM25, k: int = DEFAULT_K) -> str:
+    """Retrieve the top k chunks for an example's question and build its prompt."""
+    chunks = [chunk for chunk, _ in index.search(example.question, k)]
+    return build_prompt(example.question, chunks)
+
+
+def select_examples(
+    examples: Iterable[Example], split: str, limit: int | None = None
+) -> list[Example]:
+    """Examples in ID order, from one split (`dev` or `test`) or `all`, up to `limit`."""
+    if split not in ("dev", "test", "all"):
+        raise ValueError(f"split must be dev, test, or all, got {split!r}")
+    selected = [
+        example
+        for example in sorted(examples, key=lambda example: example.id)
+        if split == "all" or assign_split(group_key(example)) is Split(split)
+    ]
+    return selected[:limit]
+
+
 def cache_key(model_name: str, prompt: str) -> str:
     """Hash everything that decides a model's output: the model, its settings, the prompt."""
     payload = json.dumps([model_name, prompt], ensure_ascii=False)
@@ -212,8 +232,7 @@ def run(
     """Answer every example, using the cache where possible, in the order given."""
     results = []
     for position, example in enumerate(examples, start=1):
-        chunks = [chunk for chunk, _ in index.search(example.question, k)]
-        prompt = build_prompt(example.question, chunks)
+        prompt = prompt_for(example, index, k)
         key = cache_key(model.name, prompt)
         answer = cache.get(key)
         cached = answer is not None
@@ -296,11 +315,7 @@ def main(
         print(f"error: {error}")
         return 2
 
-    selected = [
-        example
-        for example in sorted(examples, key=lambda example: example.id)
-        if args.split == "all" or assign_split(group_key(example)) is Split(args.split)
-    ][: args.limit]
+    selected = select_examples(examples, args.split, args.limit)
     model = make_model(args.model, args.ollama_url)
     print(f"model {model.name}")
     print(f"{len(selected)} {args.split} examples, k={args.k}, cache {args.cache} ({len(cache)})")
