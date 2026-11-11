@@ -15,10 +15,10 @@ Pre-alpha. This repository currently contains the project skeleton, its quality 
 the dataset schema and loader, the evidence corpus tooling (HTML pages and PDF documents),
 an evidence verifier, a dataset of 248 verified examples on 101 public UCCS documents with
 its version and dev/test split, deterministic answer scorers, a BM25 retrieval baseline
-with measured recall, a model runner with an answer cache and a first comparison of two
-local models, and the first statistical methods: a paired bootstrap with a measured
-coverage study, McNemar's exact test, Holm correction, and an exact power analysis.
-Everything under "Planned" is not built yet.
+with measured recall, a model runner with an answer cache, a regression gate that
+compares two models' answers, and the statistical methods behind it: a paired bootstrap
+with a measured coverage study, McNemar's exact test, Holm correction, and an exact power
+analysis. Everything under "Planned" is not built yet.
 
 ## Current
 
@@ -44,6 +44,10 @@ Everything under "Planned" is not built yet.
 - Model runner: answers each question with a local model served by Ollama from the top 5
   BM25 chunks, caches every answer under a hash of the model, its settings, and the full
   prompt, and scores the run with the deterministic scorers (see "Runner" below)
+- Regression gate: compares two models' cached answers with McNemar's exact test and a
+  paired bootstrap, breaks the change down by category with Holm correction, reports
+  what the comparison could have detected, and exits 1 only on a significant regression
+  (see "Comparing two systems" below)
 - Paired bootstrap confidence intervals for the difference between two systems, and a
   coverage study that measures how often those intervals are actually right (see
   "Statistics" below)
@@ -71,8 +75,6 @@ Everything under "Planned" is not built yet.
   rate the power analysis currently assumes
 - Better retrieval, measured against the BM25 baseline: embedding and hybrid search, and
   chunking by sentence or section
-- `trustbench compare`: McNemar's test and the paired bootstrap on two cached runs,
-  automating the comparison under "Runner" that is done by hand today
 - A single `trustbench` command for running, comparing, and checking
 - GitHub Action that comments on a PR and fails only on significant regressions
 - Systems under test: [InferX](https://github.com/Pacosalazar8403/inferx) routing policies
@@ -348,8 +350,8 @@ them (9 unanswerable and 34 with key facts):
 
 On the same 43 examples, 3b passed 12 that 1b failed and failed none that 1b passed.
 McNemar's exact test gives `wins 12, losses 0, p = 0.0005`, so the difference is not
-noise. The power analysis agrees: 43 examples can only detect a large gap, and this gap
-is 28 points.
+noise (see "Comparing two systems" for the full report). The power analysis agrees: 43
+examples can only detect a large gap, and this gap is 28 points.
 
 Crossing abstention with retrieval shows what "better" means here. For each answerable
 dev question, the table checks whether an evidence quote was in the 5 chunks the model
@@ -387,6 +389,81 @@ citations make an invented answer look checked.
 - **Timings are from one laptop.** One 3b answer of 60 tokens took 192 seconds, which
   points to a stall on the machine rather than the model, so totals are not a reliable
   measure of model speed. The cache records seconds and tokens for every answer.
+
+## Comparing two systems
+
+`trustbench.compare` is the regression gate. It reads a baseline's and a candidate's
+answers from the runner's cache, pairs them on every example the deterministic scorers
+can judge, and decides whether the candidate got worse:
+
+```bash
+uv run python -m trustbench.compare data/uccs.jsonl corpus/uccs \
+  --baseline llama3.2:1b --candidate llama3.2:3b
+```
+
+It never calls a model, so it is fast, repeatable, and always judges exactly the answers
+that were run and inspected. Prompts are rebuilt with the runner's own functions, so an
+answer is found only if it came from the same question, chunks, and prompt template. If
+any answer is missing, it stops and prints the runner command that would make it.
+
+What it reports, and why each part is there:
+
+- **Verdict:** McNemar's exact test on all judged examples. The gate fails only on a
+  **significant regression**: more losses than wins, with p at or below alpha (default
+  0.05). A drop of one or two examples is noise, and a gate that fails on noise gets
+  switched off.
+- **Size of the change:** a paired bootstrap interval for the difference in pass rate,
+  with a warning when there are fewer than 100 examples (see "Measured coverage").
+- **Where it changed:** one row per category, with Holm-adjusted p-values. These are for
+  diagnosis and are not part of the verdict, because failing on any of several slices
+  would raise the chance of a false alarm above alpha.
+- **What it could have caught:** the smallest drop detected with 80% power, at the
+  number of judged examples and the disagreement rate this comparison actually saw, so
+  "no significant change" is not read as "no change".
+- **Which examples changed:** the IDs lost and won, for error analysis.
+
+Exit codes: 0 if there is no significant regression, 1 if there is one, and 2 if the
+comparison could not run (missing answers, a missing corpus, or nothing to judge). A CI
+job can fail on 1 without ever mistaking a broken setup for a pass.
+
+On dev, with llama3.2:1b as the baseline and llama3.2:3b as the candidate:
+
+```text
+43 judged examples (115 more need a judge)
+pass rate  baseline 27.9%  candidate 55.8%  difference +27.9 points
+bootstrap  +0.279 [+0.140, +0.419] (95% CI)
+McNemar    wins 12, losses 0, p = 0.0005
+
+  category       judged  baseline candidate  wins losses       p  adj. p
+  conditional         3         0         1     1      0  1.0000  1.0000
+  lookup             26         9        13     4      0  0.1250  0.3750
+  multi_passage       5         1         3     2      0  0.5000  1.0000
+  unanswerable        9         2         7     5      0  0.0625  0.2500
+
+power: at 43 examples and a 27.9% disagreement rate, a drop of 22.6 points or more is
+detected 80% of the time
+verdict: IMPROVEMENT (p = 0.0005 <= alpha 0.05)
+```
+
+Swapping the two models gives `REGRESSION` and exit code 1: the gate catches a downgrade.
+
+The improvement is significant overall, but no single category is, even before Holm
+correction. The 12 wins are spread over four categories, so no slice has enough
+disagreements on its own: the unanswerable slice went 5 to 0, one short of the 6
+one-way disagreements McNemar's test needs at the 5% level. Pooling is what makes the
+overall result possible, and it is also why slices cannot gate.
+
+Known limitations:
+
+- **Only the deterministically judged examples count**, so the gate is blind to changes
+  in the prose answers until an LLM judge is added.
+- **Both runs must use the same split and `k`.** A comparison across different retrieval
+  settings needs both settings run first.
+- **The bootstrap resamples positions.** The seed is fixed and examples are sorted by ID,
+  so the interval is reproducible for the same data, but two datasets with the same
+  counts in a different order give slightly different intervals.
+- **One run per model.** Whether a model's own answers change between runs is not
+  measured yet; that is the noise baseline.
 
 ## Statistics
 
