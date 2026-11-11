@@ -6,10 +6,16 @@ kappa. The comparison that matters most is on answers the deterministic scorers 
 judge, because that is where the judge would be used. Agreement on 60 labels is itself
 uncertain, so kappa comes with a bootstrap interval.
 
-The judge is trusted for gating only if kappa reaches `TRUST_KAPPA` (0.6, the start of
-"substantial" agreement), a common bar for automated graders. The report also shows
-whether the judge is more lenient or stricter than the person, and lists every
-disagreement with the judge's reason and the person's note.
+The bar is `TRUST_KAPPA` (0.6, the start of "substantial" agreement), a common bar for
+automated graders, and it is applied to the interval, not to the point estimate, the same
+way the regression gate refuses to call a result from a point estimate:
+
+- **TRUSTED:** the whole interval is at or above the bar.
+- **NOT TRUSTED:** the whole interval is below it.
+- **INCONCLUSIVE:** the interval contains the bar, so more labels are needed.
+
+The report also shows whether the judge is more lenient or stricter than the person, and
+lists every disagreement with the judge's reason and the person's note.
 
 Run `python -m trustbench.calibrate data/uccs.jsonl` after labeling.
 """
@@ -149,19 +155,24 @@ def report(items: Sequence[Item], exclude: set[str]) -> list[str]:
                 f"{'pass' if item.human else 'fail'}, judge "
                 f"{'pass' if item.judge.passed else 'fail'}: {item.judge.reason}{note}"
             )
-    kappa = agreement(*with_judge(prose)).kappa if prose else None
-    if kappa is not None and kappa >= TRUST_KAPPA:
-        lines.append(
-            f"verdict: TRUSTED (kappa {kappa:.2f} >= {TRUST_KAPPA} on answers the scorers "
-            "cannot judge)"
-        )
-    else:
-        shown = "undefined" if kappa is None else f"{kappa:.2f}"
-        lines.append(
-            f"verdict: NOT TRUSTED (kappa {shown} < {TRUST_KAPPA} on answers the scorers "
-            "cannot judge)"
-        )
+    lines.append(verdict(*with_judge(prose)))
     return lines
+
+
+def verdict(human: Sequence[bool], judge: Sequence[bool]) -> str:
+    """TRUSTED, NOT TRUSTED, or INCONCLUSIVE, from kappa's interval on prose answers."""
+    where = "on answers the scorers cannot judge"
+    kappa = agreement(human, judge).kappa if human else None
+    interval = kappa_interval(human, judge) if human else None
+    if kappa is None or interval is None:
+        return f"verdict: INCONCLUSIVE (kappa cannot be estimated {where}; label more answers)"
+    low, high = interval
+    shown = f"kappa {kappa:.2f}, 95% CI [{low:.2f}, {high:.2f}]"
+    if low >= TRUST_KAPPA:
+        return f"verdict: TRUSTED ({shown} {where}, all at or above {TRUST_KAPPA})"
+    if high < TRUST_KAPPA:
+        return f"verdict: NOT TRUSTED ({shown} {where}, all below {TRUST_KAPPA})"
+    return f"verdict: INCONCLUSIVE ({shown} {where} contains {TRUST_KAPPA}; label more answers)"
 
 
 def main(

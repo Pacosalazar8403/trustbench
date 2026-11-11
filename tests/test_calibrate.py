@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from trustbench.calibrate import judge_labels, kappa_interval, main, report
+from trustbench.calibrate import judge_labels, kappa_interval, main, report, verdict
 from trustbench.label import Label, append_label
 from trustbench.runner import AnswerCache, Generation
 from trustbench.schema import Category, Difficulty, Evidence, Example
@@ -115,19 +115,20 @@ def test_report_compares_all_three_raters_and_lists_disagreements(tmp_path: Path
     ]
 
 
-def test_the_verdict_follows_kappa_on_answers_the_scorers_cannot_judge(tmp_path: Path) -> None:
+def test_a_kappa_just_over_the_bar_on_few_labels_is_inconclusive(tmp_path: Path) -> None:
     examples, labels = scenario()
     items = judge_labels(labels, examples, FakeJudge(), AnswerCache(tmp_path / "j.jsonl"), "v1")
-    assert report(items, set())[-1].startswith("verdict: TRUSTED (kappa 0.62 >= 0.6")
+    last = report(items, set())[-1]
+    assert last.startswith("verdict: INCONCLUSIVE (kappa 0.62, 95% CI [")
+    assert last.endswith("contains 0.6; label more answers)")
 
-    flipped = [
-        make_label(
-            label.example_id, label.answer, "incorrect" if label.label == "correct" else "correct"
-        )
-        for label in labels[:4]
-    ]
-    items = judge_labels(flipped, examples, FakeJudge(), AnswerCache(tmp_path / "j.jsonl"), "v1")
-    assert report(items, set())[-1].startswith("verdict: NOT TRUSTED (kappa -1.00 < 0.6")
+
+def test_the_verdict_uses_the_whole_interval() -> None:
+    agree = [True] * 20 + [False] * 20
+    assert verdict(agree, agree).startswith("verdict: TRUSTED (kappa 1.00, 95% CI [1.00, 1.00]")
+    opposite = [not value for value in agree]
+    assert verdict(agree, opposite).startswith("verdict: NOT TRUSTED (kappa -1.00")
+    assert verdict([], []).startswith("verdict: INCONCLUSIVE (kappa cannot be estimated")
 
 
 def test_report_adds_a_row_without_labels_that_were_not_blind(tmp_path: Path) -> None:
@@ -164,7 +165,7 @@ def test_main_reports_and_reuses_judgments(
     assert main(argv, make_judge=lambda model, url: judge) == 0
     output = capsys.readouterr().out
     assert "judge fake-judge format=json" in output
-    assert "verdict: TRUSTED" in output
+    assert "verdict: INCONCLUSIVE" in output
     assert judge.calls == 7
 
 
