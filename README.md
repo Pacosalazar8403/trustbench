@@ -16,10 +16,10 @@ the dataset schema and loader, the evidence corpus tooling (HTML pages and PDF d
 an evidence verifier, a dataset of 248 verified examples on 101 public UCCS documents with
 its version and dev/test split, deterministic answer scorers, a BM25 retrieval baseline
 with measured recall, a model runner with an answer cache, a regression gate that
-compares two models' answers, an LLM judge with 120 blind human labels and a calibration
-that is not yet conclusive, and the statistical methods behind them: a paired bootstrap
-with a measured coverage study, McNemar's exact test, Holm correction, and an exact power
-analysis. Everything under "Planned" is not built yet.
+compares two models' answers (with a pre-registered held-out test), an LLM judge with
+120 blind human labels and a calibration that is not yet conclusive, and the statistical
+methods behind them: a paired bootstrap with a measured coverage study, McNemar's exact
+test, Holm correction, and an exact power analysis. Everything under "Planned" is not built yet.
 
 ## Current
 
@@ -459,6 +459,64 @@ correction. The 12 wins are spread over four categories, so no slice has enough
 disagreements on its own: the unanswerable slice went 5 to 0, one short of the 6
 one-way disagreements McNemar's test needs at the 5% level. Pooling is what makes the
 overall result possible, and it is also why slices cannot gate.
+
+### Held-out test split: the plan, written before the run
+
+Everything above is on dev. The test split (90 questions) has never been answered by
+any model, and nothing was tuned on it. This plan was committed before either model was
+run on it, so the analysis cannot be fitted to the result:
+
+- **Run:** llama3.2:1b and llama3.2:3b on all 90 test questions, with the same settings as
+  dev (the same prompt, k = 5, temperature 0, seed 0).
+- **Analysis:** `trustbench.compare --split test` once, with 1b as the baseline. The
+  verdict rule is unchanged: McNemar's exact test at alpha 0.05 on the examples the
+  deterministic scorers can judge. The LLM judge is not used, because its calibration
+  is inconclusive.
+- **What the test split can detect:** the scorers can judge 26 of the 90 test examples.
+  At that size, no drop of any size is detected 80% of the time. If the dev result were
+  exactly true (3b wins 28% of judged examples and loses none), the chance of a
+  significant result is 77%; with a 20% win rate, it is 42%.
+- **How the result will be read:** a significant improvement confirms the dev result on
+  held-out questions. A result that is not significant does not show the models are
+  equal, only that 26 judged examples cannot tell, and will be reported that way. A
+  significant regression would contradict dev, and would be reported as such.
+- Whatever the result, it is reported here, and nothing about the systems, the prompt,
+  the scorers, or the verdict rule changes because of it.
+
+### Held-out test split: the result
+
+Both models were run on the test split after the plan above was committed (commit
+`9d10897`, 2026-11-12 13:55 -0700), and the planned comparison was run once:
+
+```text
+26 judged examples (64 more need a judge)
+pass rate  baseline 26.9%  candidate 42.3%  difference +15.4 points
+bootstrap  +0.154 [+0.038, +0.308] (95% CI)
+McNemar    wins 4, losses 0, p = 0.1250
+verdict: NO SIGNIFICANT CHANGE (p = 0.1250 > alpha 0.05)
+```
+
+Read as planned:
+
+- **Not significant.** 3b won all 4 disagreements, but McNemar's test needs at least 6
+  in one direction at the 5% level. This does not show the models are equal; it shows
+  that 26 judged examples cannot tell.
+- **The direction matches dev.** 3b passed every judged example that 1b passed, and 4
+  more.
+- **The test was weaker than planned.** The models disagreed on 15% of judged test
+  examples, against 28% on dev, which left fewer disagreements than the plan's power
+  figures assumed.
+- **The bootstrap interval excludes zero, but it does not decide.** It rests on 4
+  disagreements, and the coverage study shows that intervals on samples this small
+  contain the truth far less often than they claim. The plan named McNemar's test as
+  the verdict before the data existed, so choosing whichever method agrees afterwards is
+  ruled out.
+- **Not part of the plan, and reported only as an observation:** across dev and test,
+  3b won all 16 disagreements on judged examples and lost none.
+
+The dev improvement is consistent with the held-out data but not confirmed by it.
+Confirming it needs more judged test examples: more questions with checkable facts, or
+a judge trusted enough to grade the 64 prose answers.
 
 Known limitations:
 
