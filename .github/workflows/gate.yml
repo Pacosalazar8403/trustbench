@@ -1,0 +1,94 @@
+name: Gate
+
+# The TrustBench regression gate: compare the system main ships (main's system.toml) with
+# the one this pull request proposes (its system.toml), using committed results files.
+# It needs no models and no corpus text, so it runs in seconds.
+on:
+  pull_request:
+
+# Nothing in this workflow writes to the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only this job may comment on the pull request.
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history, so main's system.toml can be read with git show.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+
+      - name: Install Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      # The branch name is passed through env, not ${{ }} in the script, because it is
+      # text from the pull request author and could otherwise inject shell commands.
+      - name: Read main's system
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if git show "origin/${BASE_REF}:system.toml" > "$RUNNER_TEMP/base-system.toml"; then
+            echo "baseline: system.toml on ${BASE_REF}"
+          else
+            echo "${BASE_REF} has no system.toml yet, so there is no baseline to compare with"
+            cp system.toml "$RUNNER_TEMP/base-system.toml"
+          fi
+
+      - name: Run the gate
+        id: gate
+        run: |
+          set +e
+          uv run python -m trustbench.gate data/uccs.jsonl \
+            --baseline "$RUNNER_TEMP/base-system.toml" \
+            --candidate system.toml \
+            --markdown "$RUNNER_TEMP/gate.md"
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+
+      # Comment only when there was something to compare, and update the earlier comment
+      # instead of adding one per push. Pull requests from forks get a read-only token and
+      # cannot comment; the verdict below still decides.
+      - name: Comment on the pull request
+        if: steps.gate.outputs.exit != '2'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if grep -q "NO SYSTEM CHANGE" "$RUNNER_TEMP/gate.md"; then
+            echo "the system did not change, so no comment"
+          else
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --body-file "$RUNNER_TEMP/gate.md" --edit-last --create-if-none
+          fi
+
+      - name: Fail on a significant regression or a gate that could not run
+        if: steps.gate.outputs.exit != '0'
+        env:
+          GATE_EXIT: ${{ steps.gate.outputs.exit }}
+        run: |
+          if [ "$GATE_EXIT" = "1" ]; then
+            echo "::error::significant regression: see the gate comment on this pull request"
+          else
+            echo "::error::the gate could not run: see the Run the gate step"
+          fi
+          exit 1

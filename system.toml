@@ -1,0 +1,5 @@
+# The system TrustBench gates. A pull request that proposes a new system exports its
+# results (python -m trustbench.results) and points this line at them; CI then compares
+# it with main's system and fails on a significant regression.
+[system]
+results = "results/dev-llama3.2-3b.json"
