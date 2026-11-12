@@ -16,7 +16,8 @@ the dataset schema and loader, the evidence corpus tooling (HTML pages and PDF d
 an evidence verifier, a dataset of 248 verified examples on 101 public UCCS documents with
 its version and dev/test split, deterministic answer scorers, a BM25 retrieval baseline
 with measured recall, a model runner with an answer cache, a regression gate that
-compares two models' answers (with a pre-registered held-out test), an LLM judge with
+compares two models' answers (with a pre-registered held-out test) and blocks pull
+requests that make the system significantly worse, an LLM judge with
 120 blind human labels and a calibration that is not yet conclusive, and the statistical
 methods behind them: a paired bootstrap with a measured coverage study, McNemar's exact
 test, Holm correction, and an exact power analysis. Everything under "Planned" is not built yet.
@@ -49,6 +50,10 @@ test, Holm correction, and an exact power analysis. Everything under "Planned" i
   paired bootstrap, breaks the change down by category with Holm correction, reports
   what the comparison could have detected, and exits 1 only on a significant regression
   (see "Comparing two systems" below)
+- Pull request gate: committed results files, a `system.toml` naming the current system,
+  and a GitHub Action that compares main's system with a pull request's, comments the
+  report, and blocks the merge on a significant regression (see "Gating pull requests"
+  below)
 - LLM judge for answers the scorers cannot grade, with three versioned prompts; a blind
   labeling tool that can build held-out sets; 120 human labels; and a calibration that
   compares person, judge, and scorers with Cohen's kappa and its bootstrap interval (see
@@ -83,7 +88,6 @@ test, Holm correction, and an exact power analysis. Everything under "Planned" i
 - Better retrieval, measured against the BM25 baseline: embedding and hybrid search, and
   chunking by sentence or section
 - A single `trustbench` command for running, comparing, and checking
-- GitHub Action that comments on a PR and fails only on significant regressions
 - Systems under test: [InferX](https://github.com/Pacosalazar8403/inferx) routing policies
   first, then a Policy Assistant RAG system built on the same documents
 
@@ -530,6 +534,52 @@ Known limitations:
 - **One run per model.** Whether a model's own answers change between runs is not
   measured yet; that is the noise baseline.
 
+## Gating pull requests
+
+The gate runs on every pull request, in seconds, with no models and no corpus text. It
+cannot generate answers in CI (there is no GPU, and the corpus text is not committed), so
+answers are generated where the hardware is and committed as results, and CI compares
+committed results.
+
+- **`results/*.json`:** one system's answers on one split, with what produced them: the
+  model and its settings, the split, k, the dataset version, and hashes of the answer
+  prompt and of the corpus snapshot. Answers are sorted by example ID and pretty-printed,
+  so a pull request's diff shows which answers changed.
+- **`system.toml`:** names the results file of the current system.
+- **`trustbench.gate`:** compares main's `system.toml` (the baseline, what is shipped) with
+  the pull request's (the candidate, what is proposed), using the verdict rule from
+  "Comparing two systems". It stops with exit code 2, instead of gating on the wrong
+  data, if the results are for an older dataset version, are on different splits, or
+  leave out an example. Model, k, prompt, and corpus changes are reported, not refused.
+- **`.github/workflows/gate.yml`:** runs the gate, comments its report on the pull request
+  (one comment, updated on each push), and fails the `gate` check on a significant
+  regression. Only this job has write access, and only to pull request comments. The
+  `gate` check is required on main, so a significant regression cannot be merged.
+
+To propose a different system:
+
+```bash
+uv run python -m trustbench.runner data/uccs.jsonl corpus/uccs --model <model>
+uv run python -m trustbench.results data/uccs.jsonl corpus/uccs --model <model>
+```
+
+then point `results` in `system.toml` at the new file, and commit both.
+
+A demonstration: [pull request #27](https://github.com/Pacosalazar8403/trustbench/pull/27)
+proposed replacing llama3.2:3b with llama3.2:1b. The gate failed it in 8 seconds and
+commented that 1b loses 12 judged dev questions that 3b passes and wins none
+(p = 0.0005), naming all 12. It was closed without merging.
+
+Known limitations:
+
+- **The gate sees only what the results show.** It judges the 43 dev questions the
+  deterministic scorers can grade, so a change that only affects prose answers passes.
+- **Results are trusted as committed.** CI cannot regenerate them, so a results file
+  that does not match its recorded model or prompt would not be caught; the provenance
+  fields make such a mismatch visible in review, not impossible.
+- **A dataset change makes every results file stale**, so changing the dataset means
+  re-running and re-exporting the current system before the gate can run again.
+
 ## LLM judge
 
 The deterministic scorers grade only 43 of the 158 dev questions; the rest are prose that
@@ -886,9 +936,10 @@ uv run pre-commit install
 ```
 
 After `pre-commit install`, every commit runs the hooks automatically. The hooks do not run
-the tests, so run them before committing. To run the same checks CI runs:
+the tests, so run them before committing. To run the same checks CI runs (CI skips
+`no-commit-to-branch`, which only guards local commits on main):
 
 ```bash
-uv run pre-commit run --all-files
+SKIP=no-commit-to-branch uv run pre-commit run --all-files
 uv run pytest
 ```
