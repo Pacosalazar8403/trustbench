@@ -46,7 +46,7 @@ significant regression.
 
 ## Status
 
-Pre-alpha. This repository currently contains the project skeleton, its quality tooling,
+Version 0.1.0, working end to end. This repository contains the project skeleton, its quality tooling,
 the dataset schema and loader, the evidence corpus tooling (HTML pages and PDF documents),
 an evidence verifier, a dataset of 248 verified examples on 101 public UCCS documents with
 its version and dev/test split, deterministic answer scorers, a BM25 retrieval baseline
