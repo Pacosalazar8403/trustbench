@@ -169,6 +169,15 @@ def test_main_reports_and_reuses_judgments(
     assert judge.calls == 7
 
 
+def test_main_calibrates_the_chosen_prompt(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    dataset, labels = write_files(tmp_path)
+    argv = [str(dataset), "--labels", str(labels), "--judgments", str(tmp_path / "j.jsonl")]
+    assert main([*argv, "--prompt", "v2"], make_judge=lambda model, url: FakeJudge()) == 0
+    assert "judge fake-judge format=json, prompt v2" in capsys.readouterr().out
+
+
 def test_main_rejects_labels_for_unknown_examples(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

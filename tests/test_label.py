@@ -8,6 +8,7 @@ import pytest
 from trustbench.corpus import build_corpus
 from trustbench.label import (
     DEFAULT_LABELS,
+    LABELS_DIR,
     Candidate,
     Label,
     LabelError,
@@ -214,6 +215,39 @@ def test_main_prints_the_rubric_and_labels_the_sample(
     assert len(read_labels(labels)) == 2
 
 
+def test_a_held_out_sample_leaves_out_every_question_labeled_elsewhere(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    examples = [make_example(f"ex-00{n}") for n in (1, 2, 3)]
+    dataset, corpus = write_project(tmp_path, examples)
+    index = build_index(DOCUMENTS)
+    cache = AnswerCache(tmp_path / "a.jsonl")
+    run(examples, index, FakeSystem("one"), cache, "v")
+    run(examples, index, FakeSystem("two"), cache, "v")
+    tuning = tmp_path / "tuning.jsonl"
+    argv = [str(dataset), str(corpus), "--models", "one", "two", "--split", "all"]
+    argv += ["--cache", str(tmp_path / "a.jsonl")]
+    assert main([*argv, "--labels", str(tuning), "--count", "1"], ask=scripted("c", "")) == 0
+    tuned = read_labels(tuning)[0].example_id
+    capsys.readouterr()
+
+    held_out = tmp_path / "held-out.jsonl"
+    replies = scripted("i", "", "i", "", "i", "", "i", "")
+    assert main([*argv, "--labels", str(held_out), "--exclude-labels", str(tuning)], replies) == 0
+
+    output = capsys.readouterr().out
+    assert "leaving out 1 questions already labeled in other files" in output
+    assert "4 answers in this sample" in output
+    assert tuned not in {label.example_id for label in read_labels(held_out)}
+
+
+def test_the_label_file_cannot_exclude_itself(tmp_path: Path) -> None:
+    labels = str(tmp_path / "l.jsonl")
+    argv = ["d.jsonl", "c", "--labels", labels, "--exclude-labels", labels]
+    with pytest.raises(SystemExit):
+        main(argv, ask=scripted())
+
+
 def test_main_returns_2_without_cached_answers(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -224,8 +258,19 @@ def test_main_returns_2_without_cached_answers(
     assert "no cached answers from one on all" in capsys.readouterr().out
 
 
-def test_the_committed_label_file_is_valid() -> None:
-    if not DEFAULT_LABELS.exists():
+def test_every_committed_label_file_is_valid() -> None:
+    files = sorted(LABELS_DIR.glob("*.jsonl"))
+    if not files:
         pytest.skip("no labels committed yet")
-    labels = read_labels(DEFAULT_LABELS)
-    assert len({label.answer_key for label in labels}) == len(labels)
+    assert DEFAULT_LABELS in files
+    for path in files:
+        labels = read_labels(path)
+        assert len({label.answer_key for label in labels}) == len(labels), path
+
+
+def test_held_out_labels_share_no_question_with_the_tuning_labels() -> None:
+    held_out = LABELS_DIR / "uccs-dev-heldout.jsonl"
+    if not held_out.exists():
+        pytest.skip("no held-out labels committed yet")
+    tuning = {label.example_id for label in read_labels(DEFAULT_LABELS)}
+    assert not tuning & {label.example_id for label in read_labels(held_out)}

@@ -16,9 +16,9 @@ the dataset schema and loader, the evidence corpus tooling (HTML pages and PDF d
 an evidence verifier, a dataset of 248 verified examples on 101 public UCCS documents with
 its version and dev/test split, deterministic answer scorers, a BM25 retrieval baseline
 with measured recall, a model runner with an answer cache, a regression gate that
-compares two models' answers, an LLM judge with blind human labels and a calibration that
-is not yet conclusive, and the statistical methods behind them: a paired bootstrap with a
-measured coverage study, McNemar's exact test, Holm correction, and an exact power
+compares two models' answers, an LLM judge with 120 blind human labels and a calibration
+that is not yet conclusive, and the statistical methods behind them: a paired bootstrap
+with a measured coverage study, McNemar's exact test, Holm correction, and an exact power
 analysis. Everything under "Planned" is not built yet.
 
 ## Current
@@ -49,9 +49,10 @@ analysis. Everything under "Planned" is not built yet.
   paired bootstrap, breaks the change down by category with Holm correction, reports
   what the comparison could have detected, and exits 1 only on a significant regression
   (see "Comparing two systems" below)
-- LLM judge for answers the scorers cannot grade, a blind labeling tool, 60 human labels,
-  and a calibration that compares person, judge, and scorers with Cohen's kappa and its
-  bootstrap interval (see "LLM judge" below)
+- LLM judge for answers the scorers cannot grade, with three versioned prompts; a blind
+  labeling tool that can build held-out sets; 120 human labels; and a calibration that
+  compares person, judge, and scorers with Cohen's kappa and its bootstrap interval (see
+  "LLM judge" below)
 - Paired bootstrap confidence intervals for the difference between two systems, and a
   coverage study that measures how often those intervals are actually right (see
   "Statistics" below)
@@ -71,8 +72,10 @@ analysis. Everything under "Planned" is not built yet.
 
 ## Planned
 
-- A stricter judge prompt (omissions, abstentions, a verdict that follows its reason),
-  confirmed on a new set of held-out labels, before the judge gets a vote in the gate
+- A judge the gate can rely on: more labels (about four times as many), a larger judge
+  model, or worked examples in the prompt, each confirmed on labels it was not designed
+  on. Until one clears the bar, judge results could be shown next to the gate's verdict
+  without changing it
 - Grow the dataset toward 500+ examples, with many more false-premise and multi-passage
   questions (the power analysis below shows what each size can detect)
 - Noise baseline (same config, repeated runs), which also measures the real disagreement
@@ -554,13 +557,50 @@ What the comparison does show:
   exactly as well as the judge does (kappa 0.44).
 - **The labels that were not blind did not matter** (0.58 without them, 0.57 with).
 
-Next: a stricter judge prompt aimed at these failures, confirmed on a new set of labels
-drawn with a different seed. Tuning the prompt on these 60 labels and measuring it on
-the same 60 would only fit it to one person's grading.
+### Trying to fix the leniency
+
+Two more prompt versions were written from the failures on these labels. Before either
+existed, a second set of 60 labels was made on 60 other dev questions, sharing none with
+the first set (`--exclude-labels`, checked in CI), so it could not influence them. The
+rule was decided in advance: a new prompt must beat v1 on the tuning labels before it is
+tried on the held-out labels.
+
+| Prompt | What changed                                         | Passes | Kappa | 95% CI       |
+|--------|------------------------------------------------------|--------|-------|--------------|
+| v1     | the original                                         | 50%    | 0.61  | [0.37, 0.82] |
+| v2     | every point in the reference is required             | 33%    | 0.38  | [0.10, 0.64] |
+| v3     | only what is asked; extras fail only if contradicted | 60%    | 0.29  | [0.04, 0.53] |
+
+Kappa is on the 45 prose answers, and the person passed 38% of the answers. Neither new
+prompt beat v1, so neither was run on the held-out labels, and v1 stays the default.
+Each rule aimed at a real failure, but each mostly moved the judge's overall strictness:
+v2 failed answers for not saying "GPS trackers" and for true claims "not in the
+reference answer", and v3 swung past v1 to more lenient. With a 7B judge, prompt wording
+behaved like a strictness dial rather than teaching a distinction. All three prompts are
+kept, and tests freeze the measured ones, so every number here can be reproduced.
+
+### v1 on labels it was never tuned on
+
+v1 was written before any labels existed, so both label sets are out of sample for it.
+
+| Labels   | Prose answers | Kappa | 95% CI       | Pass rate: person, judge |
+|----------|---------------|-------|--------------|--------------------------|
+| tuning   | 45            | 0.61  | [0.37, 0.82] | 38%, 50%                 |
+| held-out | 45            | 0.73  | [0.51, 0.91] | 45%, 48%                 |
+| both     | 90            | 0.67  | [0.51, 0.80] | 42%, 49%                 |
+
+The result replicates: the held-out estimate is higher, but the intervals overlap, and
+the labeler passed more answers in that set. Pooling narrows the interval, but its lower
+end is still below 0.6, so the verdict stays INCONCLUSIVE: the judge probably agrees
+with the person substantially, and 90 prose labels cannot rule out moderate agreement.
+Clearing the bar at this kappa would take roughly four times as many labels, since the
+interval narrows with the square root of their number. The bar was not lowered after
+these results. The judge is still more lenient than the person: on all 120 labels it
+passed 14 answers the person failed, and failed 5 the person passed.
 
 Known limitations:
 
-- **One labeler, 60 labels.** There is no second person to measure how much people
+- **One labeler, 120 labels.** There is no second person to measure how much people
   disagree with each other, which bounds how well any judge can do.
 - **The judge sees only the reference's evidence quotes**, so it cannot check a true
   claim from elsewhere on the page.

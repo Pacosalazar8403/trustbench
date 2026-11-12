@@ -11,6 +11,8 @@ repos:
       - id: check-toml
       - id: check-merge-conflict
       - id: check-added-large-files
+      # main only changes through pull requests; this refuses local commits on it too.
+      - id: no-commit-to-branch
 
   # Python checks run through uv, so they use the exact versions pinned in uv.lock.
   - repo: local
