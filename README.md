@@ -460,6 +460,29 @@ disagreements on its own: the unanswerable slice went 5 to 0, one short of the 6
 one-way disagreements McNemar's test needs at the 5% level. Pooling is what makes the
 overall result possible, and it is also why slices cannot gate.
 
+### Held-out test split: the plan, written before the run
+
+Everything above is on dev. The test split (90 questions) has never been answered by
+any model, and nothing was tuned on it. This plan was committed before either model was
+run on it, so the analysis cannot be fitted to the result:
+
+- **Run:** llama3.2:1b and llama3.2:3b on all 90 test questions, with the same settings as
+  dev (the same prompt, k = 5, temperature 0, seed 0).
+- **Analysis:** `trustbench.compare --split test` once, with 1b as the baseline. The
+  verdict rule is unchanged: McNemar's exact test at alpha 0.05 on the examples the
+  deterministic scorers can judge. The LLM judge is not used, because its calibration
+  is inconclusive.
+- **What the test split can detect:** the scorers can judge 26 of the 90 test examples.
+  At that size, no drop of any size is detected 80% of the time. If the dev result were
+  exactly true (3b wins 28% of judged examples and loses none), the chance of a
+  significant result is 77%; with a 20% win rate, it is 42%.
+- **How the result will be read:** a significant improvement confirms the dev result on
+  held-out questions. A result that is not significant does not show the models are
+  equal, only that 26 judged examples cannot tell, and will be reported that way. A
+  significant regression would contradict dev, and would be reported as such.
+- Whatever the result, it is reported here, and nothing about the systems, the prompt,
+  the scorers, or the verdict rule changes because of it.
+
 Known limitations:
 
 - **Only the deterministically judged examples count**, so the gate is blind to changes
