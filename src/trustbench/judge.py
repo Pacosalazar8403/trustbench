@@ -16,13 +16,18 @@ chance. The real check is against human labels.
 Judgments are cached like answers, keyed by the judge's name (with its settings) and the
 full judge prompt, which contains the answer being graded.
 
-There are two prompt versions. `v1` is the first prompt, kept exactly as it was so its
-cached judgments stay valid. `v2` targets the failures found when `v1` was calibrated
-against human labels: it fails any answer that misses a point the question needs, fails
-"the documents don't say" when the reference answers, accepts a referral on a question
-the documents do not answer, does not fail true extra information, and requires the
-verdict to follow from the reason. The default stays `v1` until `v2` is confirmed on
-labels it was not designed on.
+Every prompt version that was measured is kept, unchanged, so its cached judgments stay
+valid and its results can be reproduced:
+
+- `v1`: the first prompt. Calibrated against human labels, it was too lenient: it passed
+  partial answers and "the documents don't say" when the reference answers.
+- `v2`: stricter, aimed at those failures. On the same labels it overcorrected: it
+  required every detail in the reference, and treated claims the reference does not
+  mention as invented.
+- `v3`: requires only what the question asks for, and calls an extra claim wrong only if
+  it contradicts the reference answer or the evidence.
+
+The default stays `v1` until a newer version beats it on labels it was not designed on.
 
 Run `python -m trustbench.judge data/uccs.jsonl corpus/uccs --model llama3.2:3b` after
 running that model on the same split.
@@ -114,7 +119,42 @@ JUDGE_TEMPLATE_V2 = (
     '"verdict": "correct" or "incorrect"}}'
 )
 
-JUDGE_TEMPLATES = {"v1": JUDGE_TEMPLATE_V1, "v2": JUDGE_TEMPLATE_V2}
+JUDGE_TEMPLATE_V3 = (
+    "You are grading an answer to a student's question about university policy. The "
+    "reference answer is correct and is based on the evidence below.\n"
+    "\n"
+    "Grade by these rules:\n"
+    "1. Find only the points the question asks for. The reference answer may contain more "
+    "than the question needs; a detail the question does not ask about is not required. "
+    'For example, if the question is whether an office is open on Saturdays, "No" '
+    "answers it even if the reference also lists the weekday hours. If a point the "
+    "question asks for is missing from the answer or wrong in it, the answer is "
+    "incorrect.\n"
+    "2. If the answer says the documents do not contain the answer, or that it does not "
+    "know, but the reference answer gives an answer, the answer is incorrect.\n"
+    "3. If the reference answer says the documents do not answer the question, the answer "
+    "is correct if it does not invent an answer. Saying the documents do not say, or "
+    "pointing the student to an office, is correct. Only in this case, making up steps, "
+    "rules, or facts is incorrect.\n"
+    "4. A claim is not wrong just because the reference answer does not mention it. Call "
+    "a claim wrong only if it contradicts the reference answer or the evidence.\n"
+    "\n"
+    "Question: {question}\n"
+    "Reference answer: {reference}\n"
+    "Evidence:\n"
+    "{evidence}\n"
+    "\n"
+    "Answer to grade: {answer}\n"
+    "\n"
+    "In your reason, name the points the question asks for and say whether the answer "
+    "gives each one correctly. If your reason names a point the question asks for that is "
+    "missing or wrong, or a claim that contradicts the reference answer or the evidence, "
+    'the verdict must be "incorrect". Otherwise it must be "correct".\n'
+    'Reply with JSON only, in this order: {{"reason": "<one or two sentences>", '
+    '"verdict": "correct" or "incorrect"}}'
+)
+
+JUDGE_TEMPLATES = {"v1": JUDGE_TEMPLATE_V1, "v2": JUDGE_TEMPLATE_V2, "v3": JUDGE_TEMPLATE_V3}
 
 
 @dataclass(frozen=True)

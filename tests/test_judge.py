@@ -71,9 +71,17 @@ def test_prompt_says_when_there_is_no_evidence() -> None:
     assert "- (none: the documents do not answer this question)" in build_judge_prompt(example, "x")
 
 
-def test_the_v1_prompt_is_frozen_so_its_cached_judgments_stay_valid() -> None:
-    digest = hashlib.sha256(JUDGE_TEMPLATES["v1"].encode("utf-8")).hexdigest()
-    assert digest == "e913fa3b74b7d63540cb183447e8e2ce5f93f7a33b6170b3f4709c411113784f"
+@pytest.mark.parametrize(
+    ("version", "digest"),
+    [
+        ("v1", "e913fa3b74b7d63540cb183447e8e2ce5f93f7a33b6170b3f4709c411113784f"),
+        ("v2", "cd05c79eaca1f855fd2ac295e00c4538f186c9e2997748339f7391d77ec95954"),
+    ],
+)
+def test_measured_prompts_are_frozen_so_their_judgments_stay_valid(
+    version: str, digest: str
+) -> None:
+    assert hashlib.sha256(JUDGE_TEMPLATES[version].encode("utf-8")).hexdigest() == digest
 
 
 def test_the_v2_prompt_states_its_rules_and_keeps_reason_before_verdict() -> None:
@@ -85,6 +93,15 @@ def test_the_v2_prompt_states_its_rules_and_keeps_reason_before_verdict() -> Non
     assert "not a reason to mark the answer incorrect" in prompt
     assert 'the verdict must be "incorrect"' in prompt
     assert "Answer to grade: Dial 719-255-3460.\n" in prompt
+    assert prompt.index('"reason"') < prompt.index('"verdict"')
+
+
+def test_the_v3_prompt_requires_only_what_the_question_asks() -> None:
+    prompt = build_judge_prompt(make_example("ex-001"), "Dial 719-255-3460.", "v3")
+    assert "a detail the question does not ask about is not required" in prompt
+    assert "not wrong just because the reference answer does not mention it" in prompt
+    assert "Only in this case, making up steps" in prompt
+    assert "invented" not in prompt.split("Answer to grade:")[1]
     assert prompt.index('"reason"') < prompt.index('"verdict"')
 
 
