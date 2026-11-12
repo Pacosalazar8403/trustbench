@@ -37,7 +37,11 @@ jobs:
         run: uv sync --locked
 
       # The same hooks that run on every local commit: file hygiene, ruff, and mypy.
+      # no-commit-to-branch only guards local commits; on a push to main, CI checks out a
+      # branch named main, so that hook would fail every run there.
       - name: Run all checks (pre-commit)
+        env:
+          SKIP: no-commit-to-branch
         run: uv run pre-commit run --all-files --show-diff-on-failure
 
   test:
