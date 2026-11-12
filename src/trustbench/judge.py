@@ -16,6 +16,14 @@ chance. The real check is against human labels.
 Judgments are cached like answers, keyed by the judge's name (with its settings) and the
 full judge prompt, which contains the answer being graded.
 
+There are two prompt versions. `v1` is the first prompt, kept exactly as it was so its
+cached judgments stay valid. `v2` targets the failures found when `v1` was calibrated
+against human labels: it fails any answer that misses a point the question needs, fails
+"the documents don't say" when the reference answers, accepts a referral on a question
+the documents do not answer, does not fail true extra information, and requires the
+verdict to follow from the reason. The default stays `v1` until `v2` is confirmed on
+labels it was not designed on.
+
 Run `python -m trustbench.judge data/uccs.jsonl corpus/uccs --model llama3.2:3b` after
 running that model on the same split.
 """
@@ -47,9 +55,10 @@ from trustbench.schema import Example
 from trustbench.scoring import Score, score_answer
 
 DEFAULT_JUDGE = "qwen2.5:7b"
+DEFAULT_PROMPT = "v1"
 DEFAULT_JUDGMENTS = Path("runs/judgments.jsonl")
 
-JUDGE_TEMPLATE = (
+JUDGE_TEMPLATE_V1 = (
     "You are grading an answer to a student's question about university policy. The "
     "reference answer is correct and is based on the evidence below.\n"
     "\n"
@@ -73,6 +82,40 @@ JUDGE_TEMPLATE = (
     '"correct" or "incorrect"}}'
 )
 
+JUDGE_TEMPLATE_V2 = (
+    "You are grading an answer to a student's question about university policy. The "
+    "reference answer is correct and is based on the evidence below.\n"
+    "\n"
+    "Grade by these rules:\n"
+    "1. Find every point the question needs, using the reference answer. If any of those "
+    "points is missing from the answer or wrong in it, the answer is incorrect, even if "
+    "the rest is right.\n"
+    "2. If the answer says the documents do not contain the answer, or that it does not "
+    "know, but the reference answer gives an answer, the answer is incorrect.\n"
+    "3. If the reference answer says the documents do not answer the question, the answer "
+    "is correct if it does not invent an answer. Saying the documents do not say, or "
+    "pointing the student to an office, is correct. Making up steps, rules, or facts is "
+    "incorrect.\n"
+    "4. Extra information that the reference answer does not mention is not a reason to "
+    "mark the answer incorrect, unless it contradicts the reference answer or the "
+    "evidence.\n"
+    "\n"
+    "Question: {question}\n"
+    "Reference answer: {reference}\n"
+    "Evidence:\n"
+    "{evidence}\n"
+    "\n"
+    "Answer to grade: {answer}\n"
+    "\n"
+    "In your reason, name each point the question needs and say whether the answer gives "
+    "it correctly. If your reason names any point that is missing, wrong, or invented, "
+    'the verdict must be "incorrect".\n'
+    'Reply with JSON only, in this order: {{"reason": "<one or two sentences>", '
+    '"verdict": "correct" or "incorrect"}}'
+)
+
+JUDGE_TEMPLATES = {"v1": JUDGE_TEMPLATE_V1, "v2": JUDGE_TEMPLATE_V2}
+
 
 @dataclass(frozen=True)
 class Judgment:
@@ -85,10 +128,12 @@ class Judgment:
     cached: bool
 
 
-def build_judge_prompt(example: Example, answer: str) -> str:
-    """The question, reference answer, evidence, and the answer to grade."""
+def build_judge_prompt(example: Example, answer: str, prompt: str = DEFAULT_PROMPT) -> str:
+    """The question, reference answer, evidence, and the answer to grade, in one prompt version."""
+    if prompt not in JUDGE_TEMPLATES:
+        raise ValueError(f"unknown judge prompt {prompt!r}; choose from {sorted(JUDGE_TEMPLATES)}")
     evidence = "\n".join(f"- ({item.doc_id}) {item.quote}" for item in example.evidence)
-    return JUDGE_TEMPLATE.format(
+    return JUDGE_TEMPLATES[prompt].format(
         question=example.question,
         reference=example.reference_answer,
         evidence=evidence or "- (none: the documents do not answer this question)",
@@ -120,13 +165,14 @@ def judge_answers(
     cache: AnswerCache,
     version: str,
     on_judgment: Callable[[int, Judgment], None] | None = None,
+    prompt: str = DEFAULT_PROMPT,
 ) -> list[Judgment]:
     """Judge each example's answer, using cached judgments where possible."""
     judgments = []
     for position, example in enumerate(examples, start=1):
         answer = answers[example.id]
         reply, cached = generate_cached(
-            judge, build_judge_prompt(example, answer), cache, example.id, version
+            judge, build_judge_prompt(example, answer, prompt), cache, example.id, version
         )
         judgment = Judgment(
             example=example,
@@ -195,6 +241,7 @@ def main(
     parser.add_argument("corpus_dir", type=Path, help="corpus folder with a built manifest")
     parser.add_argument("--model", required=True, help="the model whose answers are judged")
     parser.add_argument("--judge", default=DEFAULT_JUDGE, help="Ollama model that judges")
+    parser.add_argument("--prompt", choices=sorted(JUDGE_TEMPLATES), default=DEFAULT_PROMPT)
     parser.add_argument("--split", choices=["dev", "test", "all"], default="dev")
     parser.add_argument("--limit", type=int, help="judge only the first N examples")
     parser.add_argument("--k", type=int, default=DEFAULT_K, help="chunks retrieved per question")
@@ -228,7 +275,7 @@ def main(
 
     judge = make_judge(args.judge, args.ollama_url)
     print(f"answers {system}")
-    print(f"judge   {judge.name}")
+    print(f"judge   {judge.name}, prompt {args.prompt}")
     print(f"{len(examples)} {args.split} examples, judgments {args.judgments}", flush=True)
 
     def report(position: int, judgment: Judgment) -> None:
@@ -242,7 +289,7 @@ def main(
     started = time.perf_counter()
     try:
         judgments = judge_answers(
-            examples, answers, judge, judgment_cache, dataset_version(dataset), report
+            examples, answers, judge, judgment_cache, dataset_version(dataset), report, args.prompt
         )
     except RunnerError as error:
         print(f"error: {error}")

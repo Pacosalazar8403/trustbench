@@ -1,12 +1,20 @@
 """Tests for the LLM judge, with a fake judge model."""
 
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
 
 from trustbench.corpus import build_corpus
-from trustbench.judge import build_judge_prompt, judge_answers, main, parse_verdict, summarize
+from trustbench.judge import (
+    JUDGE_TEMPLATES,
+    build_judge_prompt,
+    judge_answers,
+    main,
+    parse_verdict,
+    summarize,
+)
 from trustbench.retrieval import build_index
 from trustbench.runner import AnswerCache, Generation, OllamaModel, run
 from trustbench.schema import Category, Difficulty, Evidence, Example
@@ -61,6 +69,28 @@ def test_prompt_has_the_question_reference_evidence_and_answer() -> None:
 def test_prompt_says_when_there_is_no_evidence() -> None:
     example = make_example("ex-001", "The documents don't say.", Category.UNANSWERABLE)
     assert "- (none: the documents do not answer this question)" in build_judge_prompt(example, "x")
+
+
+def test_the_v1_prompt_is_frozen_so_its_cached_judgments_stay_valid() -> None:
+    digest = hashlib.sha256(JUDGE_TEMPLATES["v1"].encode("utf-8")).hexdigest()
+    assert digest == "e913fa3b74b7d63540cb183447e8e2ce5f93f7a33b6170b3f4709c411113784f"
+
+
+def test_the_v2_prompt_states_its_rules_and_keeps_reason_before_verdict() -> None:
+    example = make_example("ex-001")
+    prompt = build_judge_prompt(example, "Dial 719-255-3460.", "v2")
+    assert prompt != build_judge_prompt(example, "Dial 719-255-3460.", "v1")
+    assert "even if the rest is right" in prompt
+    assert "pointing the student to an office, is correct" in prompt
+    assert "not a reason to mark the answer incorrect" in prompt
+    assert 'the verdict must be "incorrect"' in prompt
+    assert "Answer to grade: Dial 719-255-3460.\n" in prompt
+    assert prompt.index('"reason"') < prompt.index('"verdict"')
+
+
+def test_an_unknown_prompt_version_is_rejected() -> None:
+    with pytest.raises(ValueError, match="unknown judge prompt 'v9'"):
+        build_judge_prompt(make_example("ex-001"), "x", "v9")
 
 
 @pytest.mark.parametrize(
@@ -200,6 +230,26 @@ def test_ctrl_c_stops_cleanly_and_keeps_finished_judgments(
     assert main(argv, make_judge=lambda model, url: InterruptedJudge()) == 130
     assert f"stopped; 1 judgments are saved in {tmp_path / 'j.jsonl'}" in capsys.readouterr().out
     assert len(AnswerCache(tmp_path / "j.jsonl")) == 1
+
+
+def test_main_uses_the_chosen_prompt_and_caches_each_version_separately(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    examples = [make_example("ex-001")]
+    dataset, corpus = write_project(tmp_path, examples)
+    run(examples, build_index(DOCUMENTS), FakeSystem(RIGHT), AnswerCache(tmp_path / "a.jsonl"), "v")
+    judge = FakeJudge()
+    argv = [str(dataset), str(corpus), "--model", "sys", "--split", "all"]
+    argv += ["--cache", str(tmp_path / "a.jsonl"), "--judgments", str(tmp_path / "j.jsonl")]
+
+    assert main(argv, make_judge=lambda model, url: judge) == 0
+    assert main([*argv, "--prompt", "v2"], make_judge=lambda model, url: judge) == 0
+
+    output = capsys.readouterr().out
+    assert "judge   fake-judge format=json, prompt v1" in output
+    assert "judge   fake-judge format=json, prompt v2" in output
+    assert output.count("ex-001 pass (new)") == 2
+    assert "Grade by these rules" in judge.prompts[1]
 
 
 def test_main_returns_2_when_answers_are_missing(

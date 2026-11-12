@@ -28,7 +28,14 @@ from pathlib import Path
 
 from trustbench.agreement import agreement
 from trustbench.dataset import DatasetError, dataset_version, load_examples
-from trustbench.judge import DEFAULT_JUDGE, DEFAULT_JUDGMENTS, build_judge_prompt, parse_verdict
+from trustbench.judge import (
+    DEFAULT_JUDGE,
+    DEFAULT_JUDGMENTS,
+    DEFAULT_PROMPT,
+    JUDGE_TEMPLATES,
+    build_judge_prompt,
+    parse_verdict,
+)
 from trustbench.label import DEFAULT_LABELS, Label, LabelError, read_labels
 from trustbench.runner import (
     OLLAMA_URL,
@@ -87,6 +94,7 @@ def judge_labels(
     judge: Model,
     cache: AnswerCache,
     version: str,
+    prompt: str = DEFAULT_PROMPT,
 ) -> list[Item]:
     """Judge every labeled answer that was not skipped, using cached judgments if possible."""
     items = []
@@ -95,7 +103,7 @@ def judge_labels(
             continue
         example = examples[label.example_id]
         reply, _ = generate_cached(
-            judge, build_judge_prompt(example, label.answer), cache, example.id, version
+            judge, build_judge_prompt(example, label.answer, prompt), cache, example.id, version
         )
         items.append(
             Item(label, example, parse_verdict(reply.answer), score_answer(example, label.answer))
@@ -186,6 +194,7 @@ def main(
     parser.add_argument("dataset", type=Path, help="JSONL dataset file")
     parser.add_argument("--labels", type=Path, default=DEFAULT_LABELS, help="label file")
     parser.add_argument("--judge", default=DEFAULT_JUDGE, help="Ollama model that judges")
+    parser.add_argument("--prompt", choices=sorted(JUDGE_TEMPLATES), default=DEFAULT_PROMPT)
     parser.add_argument("--judgments", type=Path, default=DEFAULT_JUDGMENTS)
     parser.add_argument("--ollama-url", default=OLLAMA_URL)
     parser.add_argument(
@@ -216,10 +225,10 @@ def main(
         judge: Model = OllamaModel(args.judge, args.ollama_url, json_output=True)
     else:
         judge = make_judge(args.judge, args.ollama_url)
-    print(f"judge {judge.name}")
+    print(f"judge {judge.name}, prompt {args.prompt}")
     print(f"labels {args.labels}", flush=True)
     try:
-        items = judge_labels(labels, examples, judge, cache, dataset_version(dataset))
+        items = judge_labels(labels, examples, judge, cache, dataset_version(dataset), args.prompt)
     except RunnerError as error:
         print(f"error: {error}")
         return 2
