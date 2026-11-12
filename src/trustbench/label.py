@@ -17,6 +17,11 @@ so human, scorer, and judge can all be compared on the same items.
 Labels are saved one per line as soon as they are given, with the answer text, so the
 label file stands on its own and is committed with the dataset.
 
+A held-out label set, for confirming a change that was tuned on earlier labels, must not
+share questions with them: `--exclude-labels` leaves out every answer to any question
+labeled in the given files, not only the same answers, because a prompt tuned on one
+model's answer to a question has already been shaped by that question.
+
 Run `python -m trustbench.label data/uccs.jsonl corpus/uccs` after running the models.
 """
 
@@ -48,7 +53,8 @@ from trustbench.runner import (
 from trustbench.schema import Example
 from trustbench.scoring import score_answer
 
-DEFAULT_LABELS = Path("data/labels/uccs-dev.jsonl")
+LABELS_DIR = Path("data/labels")
+DEFAULT_LABELS = LABELS_DIR / "uccs-dev.jsonl"
 DEFAULT_MODELS = ("llama3.2:1b", "llama3.2:3b")
 DEFAULT_COUNT = 60
 PROSE_SHARE = 0.75
@@ -230,9 +236,18 @@ def main(
     parser.add_argument("--labels", type=Path, default=DEFAULT_LABELS, help="label file")
     parser.add_argument("--k", type=int, default=DEFAULT_K, help="chunks retrieved per question")
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE, help="answer cache file")
+    parser.add_argument(
+        "--exclude-labels",
+        type=Path,
+        nargs="*",
+        default=[],
+        help="label files whose questions are left out entirely (for a held-out set)",
+    )
     args = parser.parse_args(argv)
     if args.count < 1 or args.k < 1:
         parser.error("--count and --k must be at least 1")
+    if args.labels in args.exclude_labels:
+        parser.error("--labels cannot also be in --exclude-labels")
 
     try:
         dataset = load_examples(args.dataset)
@@ -240,17 +255,21 @@ def main(
         index = build_index(load_corpus_text(args.corpus_dir))
         cache = AnswerCache(args.cache)
         before = len(read_labels(args.labels))
+        excluded = {label.example_id for path in args.exclude_labels for label in read_labels(path)}
     except (DatasetError, CorpusError, RunnerError, LabelError, FileNotFoundError) as error:
         show(f"error: {error}")
         return 2
 
     names = [OllamaModel(model).name for model in args.models]
+    examples = [example for example in examples if example.id not in excluded]
     candidates = find_candidates(examples, index, cache, names, args.k)
     if not candidates:
         show(f"error: no cached answers from {', '.join(args.models)} on {args.split}")
         return 2
     sample = plan_sample(candidates, args.count, args.seed)
     show(RUBRIC)
+    if excluded:
+        show(f"\nleaving out {len(excluded)} questions already labeled in other files")
     show(
         f"\n{len(sample)} answers in this sample ({sum(c.prose for c in sample)} that the "
         f"scorers cannot judge), {before} labels so far in {args.labels}\n"
