@@ -9,6 +9,41 @@ difference just noise?** It runs a baseline and a candidate on the same examples
 them with paired statistics, and fails a pull request only when quality regresses
 significantly.
 
+## At a glance
+
+- **It blocks bad changes.** In [pull request #27](https://github.com/Pacosalazar8403/trustbench/pull/27)
+  I proposed replacing llama3.2:3b with llama3.2:1b. The gate failed it in 8 seconds:
+  the pass rate fell from 55.8% to 27.9%, 1b lost 12 questions that 3b answered correctly
+  and won none (McNemar's exact test, p = 0.0005), and the required `gate` check blocked
+  the merge.
+- **It was tested on data it never saw.** I wrote the plan for the held-out test split
+  and committed it before running it. On the test split, 3b won 4 questions and lost none
+  (p = 0.125): the same direction as dev, but not significant, and reported that way.
+- **It does not trust its own judge yet.** An LLM judge grades the answers the
+  deterministic scorers cannot. Against 120 blind human labels, its agreement is
+  Cohen's kappa 0.67 with a 95% interval of [0.51, 0.80]. The bar is 0.6 for the whole
+  interval, so the result is inconclusive, and the gate uses only the deterministic scorers.
+- **The data is real and checked.** 248 questions I wrote about 101 public UCCS
+  documents, with every evidence quote verified against its source.
+
+![The gate's comment on pull request #27: REGRESSION, wins 0, losses 12, p = 0.0005](docs/images/gate-27.png)
+
+### Try it in a minute
+
+The gate runs on committed results, so reproducing #27 needs no model, no GPU, and no
+corpus download, only [uv](https://docs.astral.sh/uv/) (on Linux, macOS, or WSL):
+
+```bash
+git clone https://github.com/Pacosalazar8403/trustbench.git
+cd trustbench
+uv sync --locked
+printf '[system]\nresults = "results/dev-llama3.2-1b.json"\n' > /tmp/candidate.toml
+uv run python -m trustbench.gate data/uccs.jsonl --baseline system.toml --candidate /tmp/candidate.toml
+```
+
+It prints the same report as the comment above and exits with code 1, which means a
+significant regression.
+
 ## Status
 
 Pre-alpha. This repository currently contains the project skeleton, its quality tooling,
