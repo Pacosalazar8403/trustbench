@@ -9,10 +9,17 @@ One row is one graded answer: the question ID, the language it was asked in, the
 round, the grade, how the answer's link checked out, and the question's topic. Problems
 are collected for the whole file and reported together, each with its line number, the
 same way the JSONL dataset loader does it.
+
+`summarize` then groups the answers by round and language, counts every grade and source
+check, and gives each group's pass rate a Wilson interval, which stays honest at the small
+sample sizes hand grading produces.
 """
 
 import csv
 import io
+from collections import Counter
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
@@ -22,6 +29,7 @@ from pydantic_core import ErrorDetails
 
 from trustbench.dataset import DatasetError, DatasetIssue
 from trustbench.schema import ExampleId, NonEmptyText
+from trustbench.stats import WilsonResult, wilson_interval
 
 COLUMNS = ("id", "language", "round", "grade", "source_check", "topic")
 
@@ -156,6 +164,86 @@ def load_graded(path: Path) -> tuple[GradedAnswer, ...]:
     if issues:
         raise DatasetError(path, issues)
     return tuple(answers)
+
+
+# Grade and source labels share one column width, so both count tables line up.
+_LABEL_WIDTH = max(len(label) for label in (*Grade, *SourceCheck))
+
+
+@dataclass(frozen=True)
+class GroupSummary:
+    """Every graded answer for one round in one language, counted."""
+
+    round: int
+    language: Language
+    grades: Mapping[Grade, int]
+    sources: Mapping[SourceCheck, int]
+    pass_rate: WilsonResult
+
+    @property
+    def total(self) -> int:
+        return self.pass_rate.total
+
+
+def summarize(
+    answers: Iterable[GradedAnswer], *, confidence: float = 0.95
+) -> tuple[GroupSummary, ...]:
+    """Group answers by round and language, and count grades, sources, and passes.
+
+    Every grade and every source check appears in the counts, with 0 when nothing got it,
+    so reports line up across groups. Groups come out by round, then English before Spanish.
+    """
+    groups: dict[tuple[int, Language], list[GradedAnswer]] = {}
+    for answer in answers:
+        groups.setdefault((answer.round, answer.language), []).append(answer)
+    if not groups:
+        raise ValueError("need at least one graded answer")
+
+    languages = list(Language)
+    order = sorted(groups, key=lambda key: (key[0], languages.index(key[1])))
+    summaries = []
+    for round_number, language in order:
+        group = groups[(round_number, language)]
+        grades = Counter(answer.grade for answer in group)
+        sources = Counter(answer.source_check for answer in group)
+        passed = sum(answer.passed for answer in group)
+        summaries.append(
+            GroupSummary(
+                round=round_number,
+                language=language,
+                grades={grade: grades[grade] for grade in Grade},
+                sources={source: sources[source] for source in SourceCheck},
+                pass_rate=wilson_interval(passed, len(group), confidence=confidence),
+            )
+        )
+    return tuple(summaries)
+
+
+def summary_report(summaries: Iterable[GroupSummary]) -> list[str]:
+    """Describe each round and language: pass rate with its interval, then every count."""
+    lines: list[str] = []
+    for summary in summaries:
+        if lines:
+            lines.append("")
+        lines.append(f"round {summary.round}, {summary.language}: {summary.total} answers")
+        lines.append(f"  pass rate  {summary.pass_rate}")
+        lines.append("  grades")
+        lines += _count_lines(summary.grades.items(), summary.total)
+        lines.append("  sources")
+        lines += _count_lines(summary.sources.items(), summary.total)
+    lines.append("")
+    lines.append(
+        f"pass = {Grade.CORRECT} or {Grade.CORRECTLY_ABSTAINED}; "
+        f"{Grade.PARTLY_CORRECT} counts as a fail"
+    )
+    return lines
+
+
+def _count_lines(counts: Iterable[tuple[str, int]], total: int) -> list[str]:
+    """One aligned line per label: the count, then its share of the group."""
+    return [
+        f"    {label:{_LABEL_WIDTH}}  {count:>4}  {count / total:>6.1%}" for label, count in counts
+    ]
 
 
 def _check_header(names: list[str]) -> list[DatasetIssue]:
