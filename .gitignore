@@ -11,3 +11,6 @@ wheels/
 
 # Model answers cached by the runner (regenerable)
 runs/
+
+# Real human grades stay local until sharing is approved
+private/

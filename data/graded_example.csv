@@ -1,0 +1,25 @@
+id,language,round,grade,source_check,topic
+q01,English,1,Correct,Linked the right page,parking
+q02,English,1,Correct,Linked the right page,tuition
+q03,English,1,Partly correct,Linked another UCCS page,housing
+q04,English,1,Correctly said it doesn't know,No link,library
+q05,English,1,"Said it doesn't know, but should have answered",No link,registration
+q06,English,1,Correct,Linked the right page,financial-aid
+q01,Spanish,1,Correct,Linked the right page,parking
+q02,Spanish,1,Partly correct,Linked another UCCS page,tuition
+q03,Spanish,1,Wrong,Linked a wrong page,housing
+q04,Spanish,1,Correctly said it doesn't know,No link,library
+q05,Spanish,1,"Said it doesn't know, but should have answered",No link,registration
+q06,Spanish,1,Made up an answer,No link,financial-aid
+q01,English,2,Correct,Linked the right page,parking
+q02,English,2,Correct,Linked the right page,tuition
+q03,English,2,Correct,Linked the right page,housing
+q04,English,2,Correctly said it doesn't know,No link,library
+q05,English,2,Correct,Linked the right page,registration
+q06,English,2,Correct,Linked the right page,financial-aid
+q01,Spanish,2,Correct,Linked the right page,parking
+q02,Spanish,2,Correct,Linked the right page,tuition
+q03,Spanish,2,Partly correct,Linked another UCCS page,housing
+q04,Spanish,2,Correctly said it doesn't know,No link,library
+q05,Spanish,2,Correct,Linked the right page,registration
+q06,Spanish,2,"Said it doesn't know, but should have answered",No link,financial-aid
