@@ -2,16 +2,21 @@ from pathlib import Path
 
 import pytest
 
+from trustbench.compare import Verdict
 from trustbench.dataset import DatasetError
 from trustbench.graded import (
     Grade,
     GradedAnswer,
     Language,
     SourceCheck,
+    comparison_report,
+    language_gaps,
     load_graded,
+    round_changes,
     summarize,
     summary_report,
 )
+from trustbench.significance import holm_adjust
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "data" / "graded_example.csv"
 HEADER = "id,language,round,grade,source_check,topic\n"
@@ -276,4 +281,184 @@ def test_summary_report() -> None:
     assert labels == [*Grade, *SourceCheck] * 4
     assert lines[-1] == (
         "pass = Correct or Correctly said it doesn't know; Partly correct counts as a fail"
+    )
+
+
+# Paired comparisons
+
+
+def side(language: Language, round_number: int, passed: dict[str, bool]) -> list[GradedAnswer]:
+    """Make one round in one language: Correct for a pass, Wrong for a fail."""
+    return [
+        GradedAnswer(
+            id=key,
+            language=language,
+            round=round_number,
+            grade=Grade.CORRECT if ok else Grade.WRONG,
+            source_check=SourceCheck.NO_LINK,
+            topic="any",
+        )
+        for key, ok in passed.items()
+    ]
+
+
+def results(passing: range, total: int = 60) -> dict[str, bool]:
+    """Question IDs q01..q{total}, passing exactly those whose number is in `passing`."""
+    return {f"q{number:02d}": number in passing for number in range(1, total + 1)}
+
+
+# English passes q01-q47 (47/60). Spanish passes q01-q37 and q48 (38/60): 10 questions only
+# English passed and 1 only Spanish passed, so McNemar p = 2 * (1 + 11) / 2**11 = 0.0117.
+ENGLISH = results(range(1, 48))
+SPANISH = results(range(1, 38)) | {"q48": True}
+
+
+def test_example_file_language_gaps() -> None:
+    gaps = language_gaps(load_graded(EXAMPLE))
+
+    assert [(gap.title, gap.baseline, gap.candidate) for gap in gaps] == [
+        ("round 1", "English", "Spanish"),
+        ("round 2", "English", "Spanish"),
+    ]
+    assert [(gap.test.wins, gap.test.losses) for gap in gaps] == [(0, 2), (0, 2)]
+    assert [gap.adjusted_p for gap in gaps] == [1.0, 1.0]
+    assert all(gap.verdict is Verdict.NO_SIGNIFICANT_CHANGE for gap in gaps)
+
+
+def test_example_file_round_changes() -> None:
+    changes = round_changes(load_graded(EXAMPLE))
+
+    assert [(change.title, change.baseline, change.candidate) for change in changes] == [
+        ("English", "round 1", "round 2"),
+        ("Spanish", "round 1", "round 2"),
+    ]
+    assert [(change.test.wins, change.test.losses) for change in changes] == [(2, 0), (2, 0)]
+
+
+def test_a_real_sized_language_gap_is_a_regression() -> None:
+    answers = side(Language.ENGLISH, 1, ENGLISH) + side(Language.SPANISH, 1, SPANISH)
+
+    (gap,) = language_gaps(answers)
+
+    assert (gap.test.wins, gap.test.losses) == (1, 10)
+    assert gap.test.p_value == pytest.approx(0.01171875)
+    assert gap.adjusted_p == gap.test.p_value
+    assert gap.verdict is Verdict.REGRESSION
+
+
+def test_a_better_retest_is_an_improvement() -> None:
+    answers = side(Language.SPANISH, 1, SPANISH) + side(Language.SPANISH, 2, ENGLISH)
+
+    (change,) = round_changes(answers)
+
+    assert (change.test.wins, change.test.losses) == (10, 1)
+    assert change.verdict is Verdict.IMPROVEMENT
+
+
+def test_p_values_are_holm_adjusted_within_the_family() -> None:
+    answers = (
+        side(Language.ENGLISH, 1, ENGLISH)
+        + side(Language.SPANISH, 1, SPANISH)
+        + side(Language.ENGLISH, 2, ENGLISH)
+        + side(Language.SPANISH, 2, ENGLISH)
+    )
+
+    gaps = language_gaps(answers)
+
+    raw = [gap.test.p_value for gap in gaps]
+    assert raw == pytest.approx([0.01171875, 1.0])
+    assert [gap.adjusted_p for gap in gaps] == list(holm_adjust(raw))
+    assert gaps[0].adjusted_p == pytest.approx(2 * 0.01171875)
+
+
+def test_adjustment_can_turn_a_regression_into_no_significant_change() -> None:
+    # 1 win and 9 losses gives p = 0.0215 on its own. With three rounds there are three
+    # language gaps, and Holm multiplies the smallest p-value by 3: 0.064, past alpha.
+    spanish = results(range(1, 39)) | {"q48": True}
+    answers = side(Language.ENGLISH, 1, ENGLISH) + side(Language.SPANISH, 1, spanish)
+    for round_number in (2, 3):
+        answers += side(Language.ENGLISH, round_number, ENGLISH)
+        answers += side(Language.SPANISH, round_number, ENGLISH)
+
+    first, *_ = language_gaps(answers)
+
+    assert first.test.p_value <= 0.05
+    assert first.adjusted_p > 0.05
+    assert first.verdict is Verdict.NO_SIGNIFICANT_CHANGE
+
+
+def test_unpaired_questions_are_skipped_and_listed() -> None:
+    answers = side(Language.ENGLISH, 1, {"q01": True, "q02": True, "q03": False}) + side(
+        Language.SPANISH, 1, {"q02": False, "q03": False, "q04": True}
+    )
+
+    (gap,) = language_gaps(answers)
+
+    assert list(gap.pairs) == ["q02", "q03"]
+    assert gap.baseline_only == ("q01",)
+    assert gap.candidate_only == ("q04",)
+    lines = comparison_report("gap", [gap])
+    assert "  2 paired questions, 2 skipped" in lines
+    assert "  skipped, only in English (1): q01" in lines
+    assert "  skipped, only in Spanish (1): q04" in lines
+
+
+def test_a_round_with_one_language_is_left_out() -> None:
+    answers = (
+        side(Language.ENGLISH, 1, ENGLISH)
+        + side(Language.SPANISH, 1, SPANISH)
+        + side(Language.SPANISH, 2, ENGLISH)
+    )
+
+    assert [gap.title for gap in language_gaps(answers)] == ["round 1"]
+    assert [change.title for change in round_changes(answers)] == ["Spanish"]
+
+
+def test_one_round_has_nothing_to_compare_over_time() -> None:
+    answers = side(Language.ENGLISH, 1, ENGLISH)
+
+    assert round_changes(answers) == ()
+    assert comparison_report("before vs after", []) == [
+        "before vs after",
+        "  nothing to compare: no round or language has both sides",
+    ]
+
+
+def test_sides_with_no_shared_questions_are_rejected() -> None:
+    answers = side(Language.ENGLISH, 1, {"q01": True}) + side(Language.SPANISH, 1, {"q02": True})
+
+    with pytest.raises(ValueError, match="share no questions"):
+        language_gaps(answers)
+
+
+def test_a_question_twice_on_one_side_is_rejected() -> None:
+    answers = side(Language.ENGLISH, 1, {"q01": True}) * 2 + side(
+        Language.SPANISH, 1, {"q01": True}
+    )
+
+    with pytest.raises(ValueError, match="more than once"):
+        language_gaps(answers)
+
+
+def test_alpha_must_be_a_probability() -> None:
+    with pytest.raises(ValueError, match="alpha"):
+        language_gaps(load_graded(EXAMPLE), alpha=0.0)
+
+
+def test_comparison_report() -> None:
+    answers = side(Language.ENGLISH, 1, ENGLISH) + side(Language.SPANISH, 1, SPANISH)
+
+    lines = comparison_report("language gap", language_gaps(answers))
+
+    assert lines[:4] == [
+        "language gap",
+        "  (p-values Holm-adjusted across 1 comparison)",
+        "",
+        "round 1: Spanish vs English",
+    ]
+    assert "  pass rate  English 78.3%  Spanish 63.3%  difference -15.0 points" in lines
+    assert "  only English passed (10): " + ", ".join(f"q{n}" for n in range(38, 48)) in lines
+    assert "  only Spanish passed (1): q48" in lines
+    assert lines[-1] == (
+        "  verdict: REGRESSION, Spanish is worse than English (adjusted p = 0.0117 <= alpha 0.05)"
     )
