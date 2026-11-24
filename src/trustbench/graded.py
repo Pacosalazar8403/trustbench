@@ -13,12 +13,19 @@ same way the JSONL dataset loader does it.
 `summarize` then groups the answers by round and language, counts every grade and source
 check, and gives each group's pass rate a Wilson interval, which stays honest at the small
 sample sizes hand grading produces.
+
+Two paired comparisons reuse the regression gate's statistics. `language_gaps` compares
+Spanish with English on the same question IDs within each round, and `round_changes`
+compares every later round with round 1 within each language. Each pairs answers by
+question ID, runs McNemar's exact test, and Holm-adjusts the p-values within its family of
+comparisons, so testing several rounds or languages does not inflate false alarms. A
+question that appears on only one side cannot be paired: it is skipped and listed by ID.
 """
 
 import csv
 import io
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -27,8 +34,10 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic_core import ErrorDetails
 
+from trustbench.compare import DEFAULT_ALPHA, Verdict
 from trustbench.dataset import DatasetError, DatasetIssue
 from trustbench.schema import ExampleId, NonEmptyText
+from trustbench.significance import McNemarResult, holm_adjust, mcnemar_exact
 from trustbench.stats import WilsonResult, wilson_interval
 
 COLUMNS = ("id", "language", "round", "grade", "source_check", "topic")
@@ -237,6 +246,167 @@ def summary_report(summaries: Iterable[GroupSummary]) -> list[str]:
         f"{Grade.PARTLY_CORRECT} counts as a fail"
     )
     return lines
+
+
+@dataclass(frozen=True)
+class PairedComparison:
+    """One side compared with another on the question IDs they share.
+
+    `pairs` maps each shared question ID to (baseline passed, candidate passed). The
+    verdict uses the Holm-adjusted p-value, because each comparison is one of a family.
+    """
+
+    title: str
+    baseline: str
+    candidate: str
+    pairs: Mapping[str, tuple[bool, bool]]
+    baseline_only: tuple[str, ...]
+    candidate_only: tuple[str, ...]
+    test: McNemarResult
+    adjusted_p: float
+    alpha: float
+
+    @property
+    def verdict(self) -> Verdict:
+        if self.adjusted_p > self.alpha or self.test.wins == self.test.losses:
+            return Verdict.NO_SIGNIFICANT_CHANGE
+        if self.test.losses > self.test.wins:
+            return Verdict.REGRESSION
+        return Verdict.IMPROVEMENT
+
+
+def language_gaps(
+    answers: Iterable[GradedAnswer], *, alpha: float = DEFAULT_ALPHA
+) -> tuple[PairedComparison, ...]:
+    """Compare Spanish (candidate) with English (baseline) in every round that has both."""
+    groups = _group(answers)
+    sides = [
+        (
+            f"round {round_number}",
+            ("English", groups[(round_number, Language.ENGLISH)]),
+            ("Spanish", groups[(round_number, Language.SPANISH)]),
+        )
+        for round_number in sorted({round_number for round_number, _ in groups})
+        if (round_number, Language.ENGLISH) in groups and (round_number, Language.SPANISH) in groups
+    ]
+    return _compare_family(sides, alpha)
+
+
+def round_changes(
+    answers: Iterable[GradedAnswer], *, alpha: float = DEFAULT_ALPHA
+) -> tuple[PairedComparison, ...]:
+    """Compare every later round (candidate) with round 1 (baseline), within each language."""
+    groups = _group(answers)
+    sides = [
+        (
+            str(language),
+            ("round 1", groups[(1, language)]),
+            (f"round {round_number}", groups[(round_number, language)]),
+        )
+        for language in Language
+        for round_number in sorted({round_number for round_number, _ in groups})
+        if round_number > 1 and (1, language) in groups and (round_number, language) in groups
+    ]
+    return _compare_family(sides, alpha)
+
+
+def comparison_report(heading: str, comparisons: Sequence[PairedComparison]) -> list[str]:
+    """Describe a family of paired comparisons, each ending with its verdict."""
+    lines = [heading]
+    if not comparisons:
+        lines.append("  nothing to compare: no round or language has both sides")
+        return lines
+    noun = "comparison" if len(comparisons) == 1 else "comparisons"
+    lines.append(f"  (p-values Holm-adjusted across {len(comparisons)} {noun})")
+    for comparison in comparisons:
+        pairs = comparison.pairs
+        count = len(pairs)
+        old_rate = sum(old for old, _ in pairs.values()) / count
+        new_rate = sum(new for _, new in pairs.values()) / count
+        skipped = len(comparison.baseline_only) + len(comparison.candidate_only)
+        lost = [key for key, (old, new) in pairs.items() if old and not new]
+        won = [key for key, (old, new) in pairs.items() if new and not old]
+        relation = "<=" if comparison.adjusted_p <= comparison.alpha else ">"
+        lines += [
+            "",
+            f"{comparison.title}: {comparison.candidate} vs {comparison.baseline}",
+            f"  {count} paired questions, {skipped} skipped",
+            f"  pass rate  {comparison.baseline} {old_rate:.1%}  "
+            f"{comparison.candidate} {new_rate:.1%}  "
+            f"difference {100 * (new_rate - old_rate):+.1f} points",
+            f"  McNemar    {comparison.test}, adjusted p = {comparison.adjusted_p:.4f}",
+            f"  only {comparison.baseline} passed ({len(lost)}): {', '.join(lost) or '-'}",
+            f"  only {comparison.candidate} passed ({len(won)}): {', '.join(won) or '-'}",
+        ]
+        for side, missing in (
+            (comparison.baseline, comparison.baseline_only),
+            (comparison.candidate, comparison.candidate_only),
+        ):
+            if missing:
+                lines.append(f"  skipped, only in {side} ({len(missing)}): {', '.join(missing)}")
+        lines.append(
+            f"  verdict: {comparison.verdict}, {_meaning(comparison)} "
+            f"(adjusted p = {comparison.adjusted_p:.4f} {relation} alpha {comparison.alpha})"
+        )
+    return lines
+
+
+def _meaning(comparison: PairedComparison) -> str:
+    """Say in words what the verdict means for this pair of sides."""
+    if comparison.verdict is Verdict.REGRESSION:
+        return f"{comparison.candidate} is worse than {comparison.baseline}"
+    if comparison.verdict is Verdict.IMPROVEMENT:
+        return f"{comparison.candidate} is better than {comparison.baseline}"
+    return f"no clear difference between {comparison.baseline} and {comparison.candidate}"
+
+
+def _group(answers: Iterable[GradedAnswer]) -> dict[tuple[int, Language], list[GradedAnswer]]:
+    """Group answers by (round, language), keeping their order."""
+    groups: dict[tuple[int, Language], list[GradedAnswer]] = {}
+    for answer in answers:
+        groups.setdefault((answer.round, answer.language), []).append(answer)
+    return groups
+
+
+Side = tuple[str, Sequence[GradedAnswer]]
+
+
+def _compare_family(
+    family: Sequence[tuple[str, Side, Side]], alpha: float
+) -> tuple[PairedComparison, ...]:
+    """Pair each comparison by question ID, test it, and Holm-adjust across the family."""
+    if not 0 < alpha < 1:
+        raise ValueError(f"alpha must be between 0 and 1, got {alpha}")
+    raw = []
+    for title, (baseline_name, baseline), (candidate_name, candidate) in family:
+        old = _passes_by_id(baseline_name, baseline)
+        new = _passes_by_id(candidate_name, candidate)
+        shared = sorted(old.keys() & new.keys())
+        if not shared:
+            raise ValueError(f"{title}: {baseline_name} and {candidate_name} share no questions")
+        pairs = {key: (old[key], new[key]) for key in shared}
+        test = mcnemar_exact([old[key] for key in shared], [new[key] for key in shared])
+        baseline_only = tuple(sorted(old.keys() - new.keys()))
+        candidate_only = tuple(sorted(new.keys() - old.keys()))
+        raw.append(
+            (title, baseline_name, candidate_name, pairs, baseline_only, candidate_only, test)
+        )
+
+    adjusted = holm_adjust([test.p_value for *_, test in raw])
+    return tuple(
+        PairedComparison(*fields, adjusted_p=p, alpha=alpha)
+        for fields, p in zip(raw, adjusted, strict=True)
+    )
+
+
+def _passes_by_id(name: str, answers: Sequence[GradedAnswer]) -> dict[str, bool]:
+    """Map question ID to pass/fail, refusing an ID that appears twice on one side."""
+    passes: dict[str, bool] = {}
+    for answer in answers:
+        if answer.id in passes:
+            raise ValueError(f"{name} has question {answer.id!r} more than once")
+        passes[answer.id] = answer.passed
+    return passes
 
 
 def _count_lines(counts: Iterable[tuple[str, int]], total: int) -> list[str]:
