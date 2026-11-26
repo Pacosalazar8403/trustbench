@@ -52,10 +52,11 @@ an evidence verifier, a dataset of 248 verified examples on 101 public UCCS docu
 its version and dev/test split, deterministic answer scorers, a BM25 retrieval baseline
 with measured recall, a model runner with an answer cache, a regression gate that
 compares two models' answers (with a pre-registered held-out test) and blocks pull
-requests that make the system significantly worse, an LLM judge with
+requests that make the system significantly worse, a hand-graded mode for systems it
+cannot call, an LLM judge with
 120 blind human labels and a calibration that is not yet conclusive, and the statistical
 methods behind them: a paired bootstrap with a measured coverage study, McNemar's exact
-test, Holm correction, and an exact power analysis. Everything under "Planned" is not built yet.
+test, Holm correction, Wilson score intervals, and an exact power analysis. Everything under "Planned" is not built yet.
 
 ## Current
 
@@ -89,6 +90,10 @@ test, Holm correction, and an exact power analysis. Everything under "Planned" i
   and a GitHub Action that compares main's system with a pull request's, comments the
   report, and blocks the merge on a significant regression (see "Gating pull requests"
   below)
+- Hand-graded evaluation for systems TrustBench cannot call: a validated CSV loader for
+  human grades, pass rates with Wilson intervals per round and language, and paired
+  McNemar comparisons with Holm correction between languages and between rounds (see
+  "Scoring a system TrustBench can't call" below)
 - LLM judge for answers the scorers cannot grade, with three versioned prompts; a blind
   labeling tool that can build held-out sets; 120 human labels; and a calibration that
   compares person, judge, and scorers with Cohen's kappa and its bootstrap interval (see
@@ -614,6 +619,102 @@ Known limitations:
   fields make such a mismatch visible in review, not impossible.
 - **A dataset change makes every results file stale**, so changing the dataset means
   re-running and re-exporting the current system before the gate can run again.
+
+## Scoring a system TrustBench can't call
+
+Some systems can only be tested by hand, like a hosted chatbot with no API. For those,
+`trustbench.graded` reads a CSV of human grades and runs the same paired statistics as
+the gate:
+
+```bash
+uv run python -m trustbench.graded data/graded_example.csv
+```
+
+I used it to evaluate a university's advising chatbot: every question asked in English and
+in Spanish, each in a fresh chat, graded by hand, then retested in a later round. Those
+grades stay private until sharing is approved, so this repository has only a made-up
+example (`data/graded_example.csv`), and `private/`, where real grades live, is ignored
+by git.
+
+### Grades CSV format
+
+One row per graded answer, with these columns in any order:
+
+| Column | Values |
+| --- | --- |
+| `id` | Question ID: lowercase words and hyphens, like `q01` |
+| `language` | `English` or `Spanish` |
+| `round` | `1` for the first test, `2` for the first retest, and so on |
+| `grade` | One of the six grades below |
+| `source_check` | `Linked the right page`, `Linked another UCCS page`, `Linked a wrong page`, or `No link` |
+| `topic` | The question's topic, the same in every row for one ID |
+
+| Grade | Counts as |
+| --- | --- |
+| Correct | pass |
+| Correctly said it doesn't know | pass |
+| Partly correct | fail |
+| Wrong | fail |
+| Made up an answer | fail |
+| Said it doesn't know, but should have answered | fail |
+
+Pass/fail is strict on purpose: a student who acts on half the right answer can still get
+hurt. The summary still shows all six grades, so nothing is hidden by the rule.
+
+Like the dataset loader, the CSV loader reports every problem at once with its line
+number. It rejects unknown columns, so a spreadsheet export that still carries the
+chatbot's answer text cannot slip through, and it handles two common export quirks: the
+byte order mark Excel adds, and curly apostrophes (`doesn’t`) that spreadsheets swap in.
+
+### What it reports
+
+- **Summary per round and language:** every grade and source-check count, and the pass
+  rate with a 95% Wilson score interval. Hand grading gives small samples (about 60
+  questions per language), where the paired bootstrap covers less often than it claims
+  (see "Measured coverage") and "rate plus or minus 1.96 standard errors" collapses to
+  zero width at 0% or 100%. Wilson stays honest there: 6 of 6 correct gives
+  [61.0%, 100.0%], not a false 100%.
+- **Language gap:** Spanish against English on the same question IDs in each round, with
+  McNemar's exact test and Holm correction across rounds.
+- **Before vs after:** every later round against round 1 in each language, with McNemar's
+  exact test and Holm correction across the comparisons.
+- **Unpaired questions are skipped and listed by ID,** never dropped silently.
+- **Exit codes match the gate:** 0 for no significant regression, 1 for a significant
+  regression in any comparison, 2 when the report cannot run.
+
+Part of the report on the made-up example:
+
+```text
+round 1, English: 6 answers
+  pass rate  66.7% [30.0%, 90.3%] (95% CI)
+  grades
+    Correct                                            3   50.0%
+    Partly correct                                     1   16.7%
+    Wrong                                              0    0.0%
+    Made up an answer                                  0    0.0%
+    Correctly said it doesn't know                     1   16.7%
+    Said it doesn't know, but should have answered     1   16.7%
+
+round 1: Spanish vs English
+  6 paired questions, 0 skipped
+  pass rate  English 66.7%  Spanish 33.3%  difference -33.3 points
+  McNemar    wins 0, losses 2, p = 0.5000, adjusted p = 1.0000
+  only English passed (2): q02, q06
+  only Spanish passed (0): -
+  verdict: NO SIGNIFICANT CHANGE, no clear difference between English and Spanish (adjusted p = 1.0000 > alpha 0.05)
+```
+
+A 33-point gap with no significant change is the right answer for 6 questions: only two
+questions disagree, and a 2-to-0 split happens by chance half the time.
+
+### Known limitations
+
+- **One grader.** Every grade is one person's judgment, with no second grader to measure
+  agreement against yet.
+- **Small samples limit what can be detected.** At about 60 questions, only large gaps
+  reach significance, so "no significant change" does not mean "no difference".
+- **A hosted system can change without notice.** A round-to-round change measures the
+  system as deployed on each day, not one known change to it.
 
 ## LLM judge
 

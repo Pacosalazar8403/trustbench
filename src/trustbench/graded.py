@@ -20,8 +20,11 @@ compares every later round with round 1 within each language. Each pairs answers
 question ID, runs McNemar's exact test, and Holm-adjusts the p-values within its family of
 comparisons, so testing several rounds or languages does not inflate false alarms. A
 question that appears on only one side cannot be paired: it is skipped and listed by ID.
+
+Run `python -m trustbench.graded grades.csv` to print the summary and both comparisons.
 """
 
+import argparse
 import csv
 import io
 from collections import Counter
@@ -409,6 +412,43 @@ def _passes_by_id(name: str, answers: Sequence[GradedAnswer]) -> dict[str, bool]
     return passes
 
 
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="python -m trustbench.graded",
+        description="Summarize and compare human grades from a CSV file. Exit codes: 0 no "
+        "significant regression, 1 a significant regression in a language gap or a round "
+        "change, 2 the report could not run.",
+    )
+    parser.add_argument("grades", type=Path, help="CSV file of graded answers")
+    parser.add_argument("--alpha", type=float, default=DEFAULT_ALPHA)
+    parser.add_argument("--confidence", type=float, default=0.95, help="for pass-rate intervals")
+    args = parser.parse_args(argv)
+    if not 0 < args.alpha < 1 or not 0 < args.confidence < 1:
+        parser.error("--alpha and --confidence must be between 0 and 1")
+
+    try:
+        answers = load_graded(args.grades)
+        summaries = summarize(answers, confidence=args.confidence)
+        gaps = language_gaps(answers, alpha=args.alpha)
+        changes = round_changes(answers, alpha=args.alpha)
+    except (DatasetError, FileNotFoundError, ValueError) as error:
+        print(f"error: {error}")
+        return 2
+
+    print(f"{args.grades}: {len(answers)} graded answers")
+    print()
+    for line in summary_report(summaries):
+        print(line)
+    print()
+    for line in comparison_report("language gap: Spanish vs English on the same questions", gaps):
+        print(line)
+    print()
+    for line in comparison_report("before vs after: each later round vs round 1", changes):
+        print(line)
+    regressed = any(c.verdict is Verdict.REGRESSION for c in (*gaps, *changes))
+    return 1 if regressed else 0
+
+
 def _count_lines(counts: Iterable[tuple[str, int]], total: int) -> list[str]:
     """One aligned line per label: the count, then its share of the group."""
     return [
@@ -440,3 +480,7 @@ def _describe(error: ErrorDetails) -> str:
     """Turn one Pydantic error into 'column: message'."""
     location = ".".join(str(part) for part in error["loc"]) or "row"
     return f"{location}: {error['msg']}"
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
