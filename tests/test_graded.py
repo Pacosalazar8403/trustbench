@@ -12,6 +12,7 @@ from trustbench.graded import (
     comparison_report,
     language_gaps,
     load_graded,
+    main,
     round_changes,
     summarize,
     summary_report,
@@ -462,3 +463,60 @@ def test_comparison_report() -> None:
     assert lines[-1] == (
         "  verdict: REGRESSION, Spanish is worse than English (adjusted p = 0.0117 <= alpha 0.05)"
     )
+
+
+# Command line
+
+
+def grades_csv(tmp_path: Path, english: dict[str, bool], spanish: dict[str, bool]) -> Path:
+    """Write a round-1 CSV: Correct for a pass, Wrong for a fail."""
+    rows = [
+        f"{key},{language},1,{'Correct' if ok else 'Wrong'},No link,any\n"
+        for language, passed in (("English", english), ("Spanish", spanish))
+        for key, ok in passed.items()
+    ]
+    return write(tmp_path, HEADER + "".join(rows))
+
+
+def test_main_prints_every_section(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([str(EXAMPLE)]) == 0
+
+    out = capsys.readouterr().out
+    assert out.startswith(f"{EXAMPLE}: 24 graded answers\n")
+    assert "round 2, Spanish: 6 answers" in out
+    assert "language gap: Spanish vs English on the same questions" in out
+    assert "before vs after: each later round vs round 1" in out
+    assert "verdict: NO SIGNIFICANT CHANGE" in out
+
+
+def test_main_exits_1_on_a_significant_regression(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main([str(grades_csv(tmp_path, ENGLISH, SPANISH))]) == 1
+    assert "verdict: REGRESSION, Spanish is worse than English" in capsys.readouterr().out
+
+
+def test_main_exits_0_when_the_gap_is_not_significant_at_a_stricter_alpha(
+    tmp_path: Path,
+) -> None:
+    assert main([str(grades_csv(tmp_path, ENGLISH, SPANISH)), "--alpha", "0.01"]) == 0
+
+
+def test_main_reports_file_problems(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    path = write(tmp_path, HEADER + "Q1,English,1,Correct,No link,parking\n")
+
+    assert main([str(path)]) == 2
+    out = capsys.readouterr().out
+    assert out.startswith("error: ")
+    assert "line 2: id:" in out
+
+
+def test_main_reports_a_missing_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([str(tmp_path / "nope.csv")]) == 2
+    assert capsys.readouterr().out.startswith("error: ")
+
+
+def test_main_rejects_a_bad_alpha() -> None:
+    with pytest.raises(SystemExit) as caught:
+        main([str(EXAMPLE), "--alpha", "1.5"])
+    assert caught.value.code == 2
